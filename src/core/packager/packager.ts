@@ -88,6 +88,7 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
           });
 
           assertNoForbiddenStrings(finalHtml, adapter.getForbiddenStrings(), network.name);
+          assertHasRequiredStrings(finalHtml, adapter.getRequiredStrings(), network.name);
 
           if (wrapInZip) {
             // Wrap the single HTML in a ZIP (+ optional config.json)
@@ -128,6 +129,7 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
           cpSync(options.buildDir, tempDir, { recursive: true });
           const zipBranchHtml = builder.toHtml();
           assertNoForbiddenStrings(zipBranchHtml, adapter.getForbiddenStrings(), network.name);
+          assertHasRequiredStrings(zipBranchHtml, adapter.getRequiredStrings(), network.name);
           writeFileSync(join(tempDir, 'index.html'), zipBranchHtml);
 
           const extraFiles: Array<{ zipPath: string; content: string }> = [];
@@ -200,6 +202,23 @@ function assertNoForbiddenStrings(html: string, forbidden: string[], networkName
     `[${networkName}] Generated HTML contains validator-forbidden string(s): ` +
       found.map((s) => `"${s}"`).join(', ') +
       `. This build would be rejected by the network validator — aborting.`,
+  );
+}
+
+/**
+ * Scan generated HTML for adapter-required substrings and throw if any are
+ * missing. Guards against silent regressions in transitive code paths where
+ * critical runtime wiring (e.g. MRAID defer-boot gate) could be stripped
+ * without any test-level signal, manifesting only as black screen in prod.
+ */
+function assertHasRequiredStrings(html: string, required: string[], networkName: string): void {
+  if (!required.length) return;
+  const missing = required.filter((needle) => !html.includes(needle));
+  if (missing.length === 0) return;
+  throw new Error(
+    `[${networkName}] Generated HTML is missing required string(s): ` +
+      missing.map((s) => `"${s}"`).join(', ') +
+      `. Build is broken — aborting.`,
   );
 }
 

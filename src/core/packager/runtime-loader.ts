@@ -180,12 +180,30 @@ var DEBUG = ${debug};
 
 // Lookup helpers that search across both text (__res) and binary (__bin) maps.
 // Returns { data: string, binary: boolean } or null.
+//
+// Virtual SystemJS modules (chunks:///, etc.) MUST NOT match by suffix —
+// e.g. 'chunks:///_virtual/index.js'.endsWith('index.js') would falsely
+// return the root index.js content for a virtual module that should resolve
+// via the SystemJS named registry. Skip suffix matching for non-file schemes.
+// Path matching also requires a '/' boundary so 'index.js' doesn't match
+// '_virtual/index.js' style paths.
+function _isVirtualScheme(url) {
+  // SystemJS virtual modules (chunks:///, virtual:///, _virtual/)
+  // and non-file schemes (blob:, data:, about:) — these MUST NOT match
+  // real ZIP file paths via suffix matching, since names like 'index.js'
+  // would falsely match 'chunks:///_virtual/index.js'.
+  return /^(chunks|virtual|blob|data|about):/.test(url);
+}
 function _suffixMatch(map, url) {
   if (map[url]) return map[url];
+  if (_isVirtualScheme(url)) return null;
   var cleanUrl = url.split('?')[0];
   for (var key in map) {
-    if (url.endsWith(key) || key.endsWith(url)) return map[key];
-    if (cleanUrl.endsWith(key) || key.endsWith(cleanUrl)) return map[key];
+    // Require '/' boundary OR exact match — prevents 'index.js' matching
+    // '_virtual/index.js' or any path ending in same filename.
+    if (url === key || cleanUrl === key) return map[key];
+    if (url.endsWith('/' + key) || cleanUrl.endsWith('/' + key)) return map[key];
+    if (key.endsWith('/' + url) || key.endsWith('/' + cleanUrl)) return map[key];
   }
   return null;
 }
@@ -550,25 +568,19 @@ function patchSystemJS() {
     }
   };
 
-  // 2. Override instantiate — load JS from __js cache instead of creating
-  // <script> elements or making network requests.
+  // 2. Override instantiate — handle .json/.css via System.register wrappers
+  // (SystemJS standard path doesn't know how to make these into modules).
+  // For .js files: fall through to SystemJS standard pipeline, which calls
+  // proto.fetch (we patched that to return content from __js cache). This
+  // preserves SystemJS's URL→register association needed for bundle wrappers
+  // like Cocos's chunks/bundle.js — direct eval+getRegister breaks named
+  // register topology when the bundle's outer anonymous + inner named
+  // registers must stay associated with their declared URLs.
   var _origInstantiate = proto.instantiate;
   proto.instantiate = function(url, parentUrl) {
-    // Normalize URL: strip fake base, try variations
     var normalized = url.replace(_fakeBase, '').replace(/^\\.\\//,'');
-    var js = _findInJs(url) || _findInJs(normalized) || _findInJs('./' + normalized);
 
-    if (js) {
-      if (DEBUG) console.log('[plbx] SystemJS loading from cache:', normalized);
-      try {
-        (0, eval)(js + '\\n//# sourceURL=' + normalized);
-      } catch(e) {
-        console.error('[plbx] SystemJS eval error for ' + normalized + ':', e);
-      }
-      return this.getRegister();
-    }
-
-    // Check if it's a .json/.css that should be wrapped
+    // Wrap .json/.css via System.register so SystemJS treats them as modules
     var asset = _findAsset(url) || _findAsset(normalized) || _findAsset('./' + normalized);
     if (asset) {
       var raw = asset.binary ? atob(asset.data) : asset.data;
@@ -588,7 +600,7 @@ function patchSystemJS() {
       }
     }
 
-    if (DEBUG) console.warn('[plbx] SystemJS cache miss, falling through:', url);
+    if (DEBUG) console.warn('[plbx] SystemJS instantiate fallthrough:', url);
     return _origInstantiate.call(this, url, parentUrl);
   };
 
@@ -641,14 +653,23 @@ function bootCocos() {
   // Call deferred boot callback (System.import etc.)
   // __plbx_boot is defined inline in <body> — it should already exist since
   // we inject our scripts at end of <body>. Safety fallback: wait for DOM.
+  // Pre-boot hook (__plbx_pre_boot) lets network adapters gate Cocos boot —
+  // e.g. MRAID adapters delay boot until mraid.isViewable() in video+playable combos.
   function callBoot() {
-    if (typeof window.__plbx_boot === 'function') {
-      if (DEBUG) console.log('[plbx] Calling deferred boot');
-      try { window.__plbx_boot(); } catch(e) {
-        console.error('[plbx] Boot callback error:', e);
-      }
-    } else if (DEBUG) {
-      console.warn('[plbx] __plbx_boot not found');
+    if (typeof window.__plbx_boot !== 'function') {
+      if (DEBUG) console.warn('[plbx] __plbx_boot not found');
+      return;
+    }
+    if (DEBUG) console.log('[plbx] Calling deferred boot');
+    var boot = window.__plbx_boot;
+    function doBoot() {
+      try { boot(); } catch(e) { console.error('[plbx] Boot callback error:', e); }
+    }
+    if (typeof window.__plbx_pre_boot === 'function') {
+      try { window.__plbx_pre_boot(doBoot); }
+      catch(e) { console.error('[plbx] pre_boot error:', e); doBoot(); }
+    } else {
+      doBoot();
     }
   }
   if (typeof window.__plbx_boot === 'function') {

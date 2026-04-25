@@ -88,6 +88,13 @@ describe('generateRuntimeLoader', () => {
     expect(code).toContain('setTimeout(signalLifecycle');
     expect(code).toContain('_lifecycleDone');
   });
+
+  it('should support __plbx_pre_boot hook for MRAID defer-boot gate', () => {
+    const code = generateRuntimeLoader();
+    // callBoot wraps __plbx_boot and hands it to __plbx_pre_boot if defined
+    expect(code).toContain('__plbx_pre_boot');
+    expect(code).toContain('window.__plbx_pre_boot(doBoot)');
+  });
 });
 
 describe('binary vs text file handling', () => {

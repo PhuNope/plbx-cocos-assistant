@@ -37,6 +37,44 @@ describe('Network Adapters', () => {
         adapter.transform(builder, defaultConfig);
         expect(builder.toHtml()).toContain('mraid.js');
       });
+
+      it(`${id} should inject defer-boot gate (__plbx_pre_boot) for video+playable combo`, () => {
+        const adapter = getAdapter(id);
+        const builder = new HtmlBuilder(sampleHtml);
+        adapter.transform(builder, defaultConfig);
+        const html = builder.toHtml();
+        expect(html).toContain('__plbx_pre_boot');
+        expect(html).toContain('mraid.isViewable');
+        expect(html).toContain('viewableChange');
+      });
+    });
+
+    it('non-MRAID networks should NOT inject __plbx_pre_boot gate', () => {
+      ['facebook', 'moloco', 'google', 'tiktok', 'pangle', 'mintegral'].forEach((id) => {
+        const adapter = getAdapter(id);
+        const builder = new HtmlBuilder(sampleHtml);
+        adapter.transform(builder, defaultConfig);
+        expect(builder.toHtml()).not.toContain('__plbx_pre_boot');
+      });
+    });
+
+    mraidIds.forEach((id) => {
+      it(`${id} getRequiredStrings() should include gate + mraid.js`, () => {
+        const adapter = getAdapter(id);
+        const required = adapter.getRequiredStrings();
+        expect(required).toContain('__plbx_pre_boot = function');
+        expect(required).toContain('mraid.isViewable');
+        expect(required).toContain('viewableChange');
+        expect(required).toContain('mraid.js');
+      });
+    });
+
+    it('non-MRAID networks getRequiredStrings() should not include gate', () => {
+      ['facebook', 'moloco', 'google', 'tiktok', 'pangle', 'tapjoy'].forEach((id) => {
+        const adapter = getAdapter(id);
+        const required = adapter.getRequiredStrings();
+        expect(required).not.toContain('__plbx_pre_boot = function');
+      });
     });
   });
 
@@ -54,6 +92,11 @@ describe('Network Adapters', () => {
       adapter.transform(builder, defaultConfig);
       const html = builder.toHtml();
       expect(html).toContain('user-scalable=no');
+    });
+
+    it('getRequiredStrings() should include viewport', () => {
+      const adapter = getAdapter('applovin');
+      expect(adapter.getRequiredStrings()).toContain('user-scalable=no');
     });
 
     it('should use mraid.open() for CTA bridge', () => {

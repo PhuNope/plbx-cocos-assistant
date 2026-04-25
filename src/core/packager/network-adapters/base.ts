@@ -17,6 +17,14 @@ export interface NetworkAdapter {
    * only after upload.
    */
   getForbiddenStrings(): string[];
+  /**
+   * Substrings that MUST appear in the final HTML. Packager scans and aborts
+   * if any are missing. Guards against silent regressions in transitive code
+   * (base adapter, runtime-loader) that could strip critical runtime wiring.
+   * Example: MRAID defer-boot gate — if missing, video+playable combo goes
+   * black screen in prod without any build-time signal.
+   */
+  getRequiredStrings(): string[];
 }
 
 /**
@@ -46,6 +54,29 @@ export function mraidBridge(): string {
   return buildPlbxBridge(
     `if (window.mraid) { url ? mraid.open(url) : mraid.open(); } else if (url) { window.open(url, "_blank"); }`,
   );
+}
+
+/**
+ * MRAID defer-boot gate — same pattern as super-html's viewable_start_ads().
+ * Defers Cocos boot until ad is viewable. Fixes video+playable combo black screen
+ * (AppLovin Axon etc.) where playable HTML preloads in hidden WebView while video plays,
+ * causing Cocos to init with 0x0 canvas.
+ *
+ * Registers window.__plbx_pre_boot(origBoot) — called by runtime-loader before Cocos boot.
+ * If mraid.isViewable() → boot immediately. Else → wait for viewableChange(true) → boot.
+ * If no mraid at all → boot immediately (runtime preview, validators without MRAID).
+ */
+export function mraidDeferBootGate(): string {
+  return `window.__plbx_pre_boot = function(boot) {
+  if (!window.mraid) { boot(); return; }
+  function gate() {
+    if (mraid.isViewable()) { boot(); return; }
+    mraid.addEventListener('viewableChange', function h(v) {
+      if (v) { mraid.removeEventListener('viewableChange', h); boot(); }
+    });
+  }
+  mraid.getState() === 'loading' ? mraid.addEventListener('ready', gate) : gate();
+};`;
 }
 
 /** Facebook/Moloco bridge */
@@ -93,6 +124,8 @@ export class BaseAdapter implements NetworkAdapter {
     // Inject MRAID if needed
     if (this.networkConfig.mraid) {
       builder.injectHeadScript('mraid.js');
+      // Defer Cocos boot until mraid.isViewable() — fixes video+playable combo black screen
+      builder.injectBodyScript(mraidDeferBootGate());
     }
     // Inject SDK URL if specified
     if (this.networkConfig.sdkUrl) {
@@ -132,6 +165,21 @@ export class BaseAdapter implements NetworkAdapter {
   }
 
   getForbiddenStrings(): string[] {
+    return [];
+  }
+
+  getRequiredStrings(): string[] {
+    // MRAID networks must ship the defer-boot gate — without it, video+playable
+    // combo (AppLovin Axon, etc.) shows black screen because Cocos initializes
+    // in hidden WebView with 0x0 canvas.
+    if (this.networkConfig.mraid) {
+      return [
+        '__plbx_pre_boot = function',
+        'mraid.isViewable',
+        'viewableChange',
+        'mraid.js',
+      ];
+    }
     return [];
   }
 }

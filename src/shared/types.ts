@@ -1,5 +1,13 @@
-export type OutputFormat = 'html' | 'zip';
+export type OutputFormat = 'html' | 'zip' | 'launcher-payload';
 export type Orientation = 'portrait' | 'landscape' | 'auto';
+
+export interface LauncherPayloadConfig {
+  launcherMaxSize: number;   // strict bytes ceiling for launcher.html (e.g. 3 * 1024)
+  payloadMaxSize: number;    // bytes ceiling for payload.js (e.g. 5 MB)
+  assetProvider: string;     // metadata header value (e.g. "Playbox")
+  assetVersion: string;      // metadata header value (e.g. "2.0")
+  includeSplash: boolean;    // optional PLBX branded splash inside launcher
+}
 
 export interface NetworkConfig {
   id: string;
@@ -16,6 +24,7 @@ export interface NetworkConfig {
   inlineAssets: boolean;     // whether to inline all assets into HTML
   singleFileZip?: boolean;   // ZIP containing a single fully-inlined HTML (e.g. Mintegral)
   dualFormat?: boolean;      // whether the network supports both html and zip output
+  launcherPayload?: LauncherPayloadConfig; // launcher-payload format config
 }
 
 export interface PackageConfig {
@@ -84,6 +93,14 @@ export interface PackageResult {
   maxSize: number;
   withinLimit: boolean;
   format: OutputFormat;
+  /** Only set for launcher-payload format: payload.js path */
+  secondaryPath?: string;
+  /** Only set for launcher-payload format: payload.js bytes */
+  secondarySize?: number;
+  /** Only set for launcher-payload format: payload size ceiling */
+  secondaryMaxSize?: number;
+  /** Only set for launcher-payload format: whether payload fits within limit */
+  secondaryWithinLimit?: boolean;
 }
 
 export interface DeployResult {

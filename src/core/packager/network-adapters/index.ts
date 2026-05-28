@@ -6,6 +6,7 @@ import { MintegralAdapter } from './mintegral';
 import { TikTokAdapter } from './tiktok';
 import { PangleAdapter } from './pangle';
 import { SnapchatAdapter } from './snapchat';
+import { MolocoV2Adapter } from './moloco-v2';
 import { getNetwork } from '../../../shared/networks';
 import { NetworkConfig } from '../../../shared/types';
 
@@ -16,6 +17,7 @@ const CUSTOM_ADAPTERS: Record<string, AdapterConstructor> = {
   google: GoogleAdapter,
   facebook: FacebookAdapter,
   moloco: FacebookAdapter, // same CTA pattern as Facebook
+  molocoV2: MolocoV2Adapter,
   mintegral: MintegralAdapter,
   tiktok: TikTokAdapter,
   pangle: PangleAdapter,

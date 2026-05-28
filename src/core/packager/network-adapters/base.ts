@@ -44,7 +44,10 @@ function buildPlbxBridge(downloadBody: string, extras?: string): string {
   game_end: function() {},
   game_ready: function() {},
   is_audio: function() { return true; },
-  is_hide_download: function() { return false; }
+  is_hide_download: function() { return false; },
+  is_muted: function() { return false; },
+  report: function() {},
+  tap: function() {}
 };
 window.super_html = window.super_html || window.plbx_html;${extras ? '\n' + extras : ''}`;
 }

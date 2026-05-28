@@ -8,5 +8,10 @@ module.exports = {
         title: 'Playbox',
       },
     },
+    networks: {
+      'moloco-v2': 'Moloco V2.0 (Launcher API)',
+    },
+    'moloco-v2-desc':
+      'Outputs launcher.html (<3KB) + payload.js (IIFE). Submit launcher to Moloco QA, upload payload via /cm/v1/creative-assets API.',
   },
 };

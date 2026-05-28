@@ -7,7 +7,8 @@ import { getNetwork, NETWORKS } from '../../shared/networks';
 import { PackageResult, OutputFormat } from '../../shared/types';
 import { PackagerOptions, PackagerResult } from './types';
 import { packDirectoryToZip } from './asset-inliner';
-import { generateFullHtml } from './runtime-loader';
+import { generateFullHtml, generatePayloadJs } from './runtime-loader';
+import { buildLauncher, fillLauncherPayloadUrl } from './launcher-builder';
 import { resolveTemplate } from './template-resolver';
 import CleanCSS from 'clean-css';
 
@@ -36,6 +37,100 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
       // Clone HTML and apply network adapter
       const builder = new HtmlBuilder(baseHtml);
       adapter.transform(builder, options.config);
+
+      if (network.format === 'launcher-payload') {
+        options.onProgress?.(networkId, 'processing', 'Building launcher + payload...');
+
+        const lpConfig = network.launcherPayload;
+        if (!lpConfig) {
+          throw new Error(`Network "${networkId}" has format=launcher-payload but no launcherPayload config`);
+        }
+
+        const outDir = join(options.outputDir, networkId);
+        mkdirSync(outDir, { recursive: true });
+
+        // Build payload.js (IIFE injecting full Cocos runtime into launcher's document)
+        const zipBuffer = await packDirectoryToZip(options.buildDir, undefined, { excludeExtensions: ['.css', '.html'] });
+        const zipBase64 = zipBuffer.toString('base64');
+        const cssContent = extractAndMinifyCss(options.buildDir);
+
+        const payloadJs = generatePayloadJs({
+          originalHtml: builder.toHtml(),
+          zipBase64,
+          cssContent,
+          buildDir: options.buildDir,
+        });
+
+        const assetTitle =
+          options.templateVariables?.assetTitle ||
+          options.templateVariables?.projectName ||
+          deriveProjectNameFromBuildDir(options.buildDir) ||
+          network.name;
+        const assetRevision = new Date().toISOString().slice(0, 10);
+        const launcher = buildLauncher({
+          assetProvider: lpConfig.assetProvider,
+          assetTitle,
+          assetRevision,
+          assetVersion: lpConfig.assetVersion,
+          payloadUrl: '#PAYLOAD_URL#',
+          includeSplash: lpConfig.includeSplash,
+        });
+
+        // Strict launcher size ceiling — fail loud if exceeded, do not ship oversized
+        const launcherSize = Buffer.byteLength(launcher, 'utf-8');
+        if (launcherSize > lpConfig.launcherMaxSize) {
+          throw new Error(
+            `[${network.name}] launcher.html is ${launcherSize}B, exceeds strict limit ${lpConfig.launcherMaxSize}B — aborting`,
+          );
+        }
+        const payloadSize = Buffer.byteLength(payloadJs, 'utf-8');
+
+        // Structural launcher checks (ASSET_PROVIDER metadata, IMP_BEACON placement, etc.)
+        const structuralErrors = validateLauncherStructure(launcher);
+        if (structuralErrors.length > 0) {
+          throw new Error(`[${network.name}] launcher.html structural errors: ${structuralErrors.join('; ')}`);
+        }
+
+        // Forbidden + required string checks against launcher + payload concatenation
+        const combined = launcher + '\n' + payloadJs;
+        assertNoForbiddenStrings(combined, adapter.getForbiddenStrings(), network.name);
+        assertHasRequiredStrings(combined, adapter.getRequiredStrings(), network.name);
+
+        const launcherPath = join(outDir, 'launcher.html');
+        const payloadPath = join(outDir, 'payload.js');
+        // Sibling for local QA / Moloco testbed — same launcher with the
+        // <script src="#PAYLOAD_URL#"> replaced by an inline <script> containing
+        // the payload IIFE verbatim. Self-contained: no sibling-file fetch, so
+        // sandboxed validators that don't serve adjacent files (Moloco preview
+        // tool, etc.) can open it directly. Production launcher.html keeps the
+        // placeholder so the upload pipeline substitutes the real CDN URL.
+        const launcherLocalPath = join(outDir, 'launcher-local.html');
+        const inlineScriptPayload = payloadJs.replace(/<\/script>/gi, '<\\/script>');
+        const launcherLocal = launcher.replace(
+          /<script\s+src=["']?#PAYLOAD_URL#["']?\s*>\s*<\/script>/i,
+          `<script>${inlineScriptPayload}</script>`,
+        );
+        writeFileSync(launcherPath, launcher);
+        writeFileSync(payloadPath, payloadJs);
+        writeFileSync(launcherLocalPath, launcherLocal);
+
+        results.push({
+          networkId,
+          networkName: network.name,
+          outputPath: launcherPath,
+          outputSize: launcherSize,
+          maxSize: lpConfig.launcherMaxSize,
+          withinLimit: launcherSize <= lpConfig.launcherMaxSize,
+          format: 'launcher-payload',
+          secondaryPath: payloadPath,
+          secondarySize: payloadSize,
+          secondaryMaxSize: lpConfig.payloadMaxSize,
+          secondaryWithinLimit: payloadSize <= lpConfig.payloadMaxSize,
+        });
+
+        options.onProgress?.(networkId, 'done');
+        continue;
+      }
 
       // Determine all formats to build
       const formats: OutputFormat[] = [network.format];
@@ -220,6 +315,64 @@ function assertHasRequiredStrings(html: string, required: string[], networkName:
       missing.map((s) => `"${s}"`).join(', ') +
       `. Build is broken — aborting.`,
   );
+}
+
+/**
+ * Walk up the build directory path looking for the first directory whose name
+ * isn't a generic build-output folder. Used as a fallback assetTitle for the
+ * Moloco V2 launcher metadata header when no projectName was provided.
+ *
+ * .../Playables/_Prod/moloco-piggy-merge/build/web-mobile → moloco-piggy-merge
+ */
+function deriveProjectNameFromBuildDir(buildDir: string): string | null {
+  const skip = new Set([
+    'build',
+    'web-mobile',
+    'web-desktop',
+    'web',
+    'html',
+    'plbx-html',
+    'dist',
+    'output',
+    'out',
+  ]);
+  const parts = buildDir.split(/[\\/]+/).filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (!skip.has(parts[i].toLowerCase())) return parts[i];
+  }
+  return null;
+}
+
+/**
+ * Structural sanity checks for a Moloco V2 launcher.html.
+ * Catches issues a substring search can't — element placement, ordering, etc.
+ */
+function validateLauncherStructure(html: string): string[] {
+  const errors: string[] = [];
+  if (!/<!--\s*ASSET_PROVIDER=/.test(html)) {
+    errors.push('metadata comment header missing ASSET_PROVIDER=');
+  }
+  if (!/<script\s+src=["']?mraid\.js["']?[^>]*>/i.test(html)) {
+    errors.push('<script src="mraid.js"> missing');
+  }
+  if (!/window\.MOLOCO_MACROS\s*=/.test(html)) {
+    errors.push('window.MOLOCO_MACROS object not declared');
+  }
+  // At least four required macros — Moloco DSP requires these key names
+  for (const macro of ['mraid_viewable', 'game_viewable', 'click', 'final_url']) {
+    if (!html.includes(macro)) {
+      errors.push(`MOLOCO_MACROS missing required key: ${macro}`);
+    }
+  }
+  if (!/%\{IMP_BEACON\}/.test(html)) {
+    errors.push('%{IMP_BEACON} placeholder missing');
+  }
+  // IMP_BEACON must sit just before </body> per spec (Moloco substitutes the
+  // tracking pixel as the last DOM hit before page unload)
+  if (!/%\{IMP_BEACON\}\s*<\/body>/i.test(html)) {
+    errors.push('%{IMP_BEACON} must be the last content before </body>');
+  }
+  return errors;
 }
 
 /**

@@ -113,6 +113,21 @@ export const NETWORKS: Record<string, NetworkConfig> = {
     inlineAssets: true,
     dualFormat: true,
   },
+  molocoV2: {
+    id: 'molocoV2',
+    name: 'Moloco V2.0 (Launcher API)',
+    format: 'launcher-payload',
+    maxSize: MB5, // overall ceiling — sub-limits enforced via launcherPayload below
+    mraid: true,
+    inlineAssets: true,
+    launcherPayload: {
+      launcherMaxSize: 3 * 1024, // 3 KB strict
+      payloadMaxSize: MB5,
+      assetProvider: 'Playbox',
+      assetVersion: '2.0',
+      includeSplash: false, // default off — keeps launcher well under 3 KB
+    },
+  },
   nefta: {
     id: 'nefta',
     name: 'Nefta',

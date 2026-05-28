@@ -719,6 +719,67 @@ export function generateRuntimeLoader(options: RuntimeLoaderOptions = {}): strin
 }
 
 /**
+ * Generate an IIFE payload script that, when loaded inside a Moloco V2 launcher,
+ * injects the full Cocos runtime + game assets into the live document.
+ *
+ * The launcher already supplies <head> (mraid.js, MOLOCO_MACROS, viewport).
+ * Payload responsibilities:
+ *  - inject the inlined Cocos <style>, systemjs-importmap, polyfills, boot wrapper
+ *    into document.head
+ *  - inject the canvas + inline scripts + ZIP-loader injection block into document.body
+ *
+ * Why DOMParser + createElement('script') instead of innerHTML:
+ *  - assigning to innerHTML leaves <script> nodes inert (they will NOT execute)
+ *  - DOMParser preserves attributes/textContent so we can re-create live <script>
+ *    nodes that the browser executes synchronously when appended
+ *  - avoids any dynamic-eval primitives, satisfying spec section 2.5 constraints
+ *
+ * Strips elements the launcher already provides (mraid.js, viewport, charset, title)
+ * to avoid double-loading.
+ */
+export function generatePayloadJs(params: {
+  originalHtml: string;
+  zipBase64: string;
+  jsModules?: Record<string, string>;
+  cssContent?: string;
+  loaderOptions?: RuntimeLoaderOptions;
+  buildDir?: string;
+}): string {
+  const fullHtml = generateFullHtml(params);
+
+  const cheerio = require('cheerio');
+  const $ = cheerio.load(fullHtml, { decodeEntities: false });
+
+  // Strip what the launcher already provides — avoids duplicates / overrides
+  $('script[src="mraid.js"]').remove();
+  $('meta[name="viewport"]').remove();
+  $('meta[charset]').remove();
+  $('title').remove();
+  $('link[rel="manifest"]').remove();
+  $('link[rel="icon"]').remove();
+  $('link[rel="shortcut icon"]').remove();
+
+  const headHtml: string = $('head').html() || '';
+  const bodyHtml: string = $('body').html() || '';
+
+  const injectHelper = `function I(t,h){var d=new DOMParser().parseFromString('<!doctype html><html><body>'+h+'</body></html>','text/html');var ns=Array.prototype.slice.call(d.body.childNodes);for(var i=0;i<ns.length;i++){var n=ns[i];if(n.nodeType!==1){if(n.nodeType===3||n.nodeType===8)t.appendChild(document.importNode(n,false));continue;}if(n.tagName==='SCRIPT'){var s=document.createElement('script');for(var j=0;j<n.attributes.length;j++)s.setAttribute(n.attributes[j].name,n.attributes[j].value);var src=n.getAttribute('src');if(!src&&n.textContent)s.text=n.textContent;t.appendChild(s);}else{t.appendChild(document.importNode(n,true));}}}`;
+
+  return (
+    '(function(){' +
+    injectHelper +
+    'var H=' +
+    JSON.stringify(headHtml) +
+    ';' +
+    'var B=' +
+    JSON.stringify(bodyHtml) +
+    ';' +
+    'I(document.head,H);' +
+    'I(document.body,B);' +
+    '})();'
+  );
+}
+
+/**
  * Generate the complete self-contained HTML with embedded assets.
  *
  * This is the main entry point for creating playable ad single-HTML files.

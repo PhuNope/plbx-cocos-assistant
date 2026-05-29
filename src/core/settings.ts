@@ -14,9 +14,13 @@ export interface ProjectSettings {
   outputDir: string;
   outputTemplate: string;
   templateVariables: Record<string, string>;
+  /** Runtime loader engine. 'self-contained' = origin-independent plbx loader; 'systemjs' = legacy. */
+  loaderMode: 'self-contained' | 'systemjs';
+  /** Networks pinned to the legacy SystemJS loader regardless of loaderMode. */
+  legacyLoaderNetworks: string[];
 }
 
-const DEFAULT_SETTINGS: ProjectSettings = {
+export const DEFAULT_SETTINGS: ProjectSettings = {
   selectedNetworks: ['ironsource', 'applovin', 'google', 'facebook', 'unity', 'mintegral', 'moloco'],
   projectName: '',  // will default to project folder name
   deploymentName: '',
@@ -30,6 +34,8 @@ const DEFAULT_SETTINGS: ProjectSettings = {
   outputDir: 'build/plbx-html',
   outputTemplate: '{networkId}/index.{ext}',
   templateVariables: {},
+  loaderMode: 'self-contained',
+  legacyLoaderNetworks: [],
 };
 
 /** Get project-scoped settings */

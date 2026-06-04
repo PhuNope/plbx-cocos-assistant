@@ -18,6 +18,33 @@ const APPLE_RE = new RegExp(
   'g'
 );
 
+/**
+ * Detect regional / localization parameters in a store URL. Ad networks expect a
+ * region-agnostic store link so the creative serves globally; a country/language
+ * lock can mis-route or reject installs. Returns the offending tokens (empty if
+ * the URL is clean).
+ *
+ *   Google Play:  ?gl=US (country), ?hl=en (language)
+ *   App Store:    apps.apple.com/<cc>/app/... (country path), ?l= / ?country=
+ */
+export function detectRegionalParams(url: string): string[] {
+  const found: string[] = [];
+
+  // Google Play localization query params.
+  const gp = url.match(/[?&](?:gl|hl)=[^&#]*/gi);
+  if (gp) found.push(...gp.map((s) => s.replace(/^[?&]/, '')));
+
+  // Apple App Store country-code path segment (apps/itunes.apple.com/<cc>/...).
+  const cc = url.match(/(?:apps|itunes)\.apple\.com\/([a-z]{2})\//i);
+  if (cc) found.push(`/${cc[1]}/ (country path)`);
+
+  // Apple language / country query params.
+  const aq = url.match(/[?&](?:l|country)=[^&#]*/gi);
+  if (aq) found.push(...aq.map((s) => s.replace(/^[?&]/, '')));
+
+  return found;
+}
+
 /** Recursively scan a build directory's source files for store-URL string literals
  *  (Google Play + Apple App Store) and return them as a deduped list of full URLs.
  *  Google Play URLs come first, then Apple. Returns [] if none found / dir missing. */

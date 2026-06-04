@@ -343,6 +343,19 @@ body {
   flex-shrink: 0;
 }
 
+/* Left-hand Axon column — border on the right instead of the left. */
+.sidebar-left {
+  border-left: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* When the Axon title heads its own column it doesn't need the section divider. */
+.sidebar-left .axon-title {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 h3 {
   font-size: 14px;
   margin-bottom: 12px;
@@ -525,6 +538,8 @@ h3 {
 .axon-verdict.pass .icon { color: #34d399; }
 .axon-verdict.warn .icon { color: #fbbf24; }
 .axon-verdict.fail .icon { color: #f87171; }
+.axon-verdict.pending .icon { color: rgba(255, 255, 255, 0.3); }
+.axon-verdict.pending .text { color: rgba(255, 255, 255, 0.4); }
 
 .axon-verdict.aggregate {
   font-weight: 600;
@@ -573,6 +588,12 @@ h3 {
   opacity: 0;
   transform: translateX(-50%) translateY(-8px);
   transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+/* Won't-track CTA (bare window.open / wrong method) — red, not green. */
+.cta-toast.bad {
+  background: rgba(220, 38, 38, 0.95);
+  box-shadow: 0 8px 32px rgba(220, 38, 38, 0.4);
 }
 
 /* ========== MOLOCOV2 SECTION ========== */

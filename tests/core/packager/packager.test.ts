@@ -349,3 +349,33 @@ describe('AppLovin Axon event-spec warnings', () => {
     expect(axonWarnings).toHaveLength(0);
   });
 });
+
+describe('Regional store-URL warnings', () => {
+  const regional = (r: any) => (r.warnings ?? []).filter((w: string) => /regional/i.test(w));
+
+  it('warns (any network) when a store URL carries a regional parameter', async () => {
+    const result = await packageForNetworks({
+      buildDir: MOCK_BUILD,
+      outputDir: PACK_OUTPUT,
+      networks: ['google'],
+      config: {
+        storeUrlAndroid: 'https://play.google.com/store/apps/details?id=com.test&gl=US',
+        orientation: 'portrait' as const,
+      },
+    });
+    expect(regional(result.results[0]).length).toBeGreaterThan(0);
+  });
+
+  it('does NOT warn for a region-clean store URL', async () => {
+    const result = await packageForNetworks({
+      buildDir: MOCK_BUILD,
+      outputDir: PACK_OUTPUT,
+      networks: ['google'],
+      config: {
+        storeUrlAndroid: 'https://play.google.com/store/apps/details?id=com.test',
+        orientation: 'portrait' as const,
+      },
+    });
+    expect(regional(result.results[0])).toHaveLength(0);
+  });
+});

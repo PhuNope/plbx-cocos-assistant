@@ -5,7 +5,7 @@ import JSZip from 'jszip';
 import { generatePreviewUtil } from './sdk-mocks';
 import { getNetwork } from '../../shared/networks';
 import { validateLauncher, LauncherCheck } from '../packager/launcher-builder';
-import { AXON_EVENTS, validateAxonSequence } from '../packager/axon-events';
+import { AXON_EVENTS } from '../packager/axon-events';
 
 let _server: http.Server | null = null;
 let _port = 0;
@@ -636,24 +636,6 @@ export async function startPreviewServer(options: {
           );
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
-          return;
-        }
-
-        // GET /api/axon-validate?events=A,B,C — validate a runtime fire sequence
-        // (order preserved, repeats kept) against the Axon spec. Reuses the same
-        // validateAxonSequence() the unit tests cover — single source of truth.
-        if (url.startsWith('/api/axon-validate')) {
-          const q = url.indexOf('?') >= 0 ? url.slice(url.indexOf('?') + 1) : '';
-          const params = new URLSearchParams(q);
-          const raw = params.get('events') || '';
-          const sequence = raw.split(',').map((s) => s.trim()).filter(Boolean);
-          const rawTs = params.get('ts') || '';
-          const timestamps = rawTs
-            ? rawTs.split(',').map((s) => Number(s)).filter((n) => !Number.isNaN(n))
-            : undefined;
-          const ts = timestamps && timestamps.length === sequence.length ? timestamps : undefined;
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ checks: validateAxonSequence(sequence, ts) }));
           return;
         }
 

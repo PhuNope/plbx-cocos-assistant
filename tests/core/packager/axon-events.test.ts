@@ -213,10 +213,10 @@ describe('validateAxonSequence', () => {
     expect(byId(checks, 'dedup')?.detail).toContain('DISPLAYED');
   });
 
-  it('allows CTA_CLICKED to repeat (user-driven, not a one-shot lifecycle event)', () => {
+  it('flags CTA_CLICKED firing more than once (spec deduped)', () => {
     const checks = validateAxonSequence(['DISPLAYED', 'CTA_CLICKED', 'CTA_CLICKED']);
-    expect(byId(checks, 'dedup')?.ok).toBe(true);
-    expect(byId(checks, 'all_conformant')?.ok).toBe(true);
+    expect(byId(checks, 'dedup')?.ok).toBe(false);
+    expect(byId(checks, 'dedup')?.detail).toContain('CTA_CLICKED');
   });
 
   it('flags CHALLENGE_STARTED firing more than once (first click only)', () => {

@@ -11,7 +11,7 @@ import { rewriteCocosJs, shouldRewriteCocosJs } from './cocos-js-rewriter';
 import { generateFullHtml, generatePayloadJs } from './runtime-loader';
 import { buildLauncher, fillLauncherPayloadUrl, validateLauncher } from './launcher-builder';
 import { resolveTemplate } from './template-resolver';
-import { extractStoreUrls } from './store-url-extractor';
+import { extractStoreUrls, detectRegionalParams } from './store-url-extractor';
 import { extractAxonUsage, validateAxonEvents } from './axon-events';
 import { buildVersionBanner } from './version-banner';
 import CleanCSS from 'clean-css';
@@ -61,6 +61,19 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
   );
   const hasGooglePlayUrl = headStoreUrls.some((u) => u.includes(GOOGLE_PLAY_MARKER));
 
+  // Regional/localization params in store URLs (gl/hl, Apple country path, etc.)
+  // should be absent so the creative serves globally. Advisory for ALL networks.
+  const regionalWarnings: string[] = [];
+  for (const u of headStoreUrls) {
+    const params = detectRegionalParams(u);
+    if (params.length) {
+      regionalWarnings.push(
+        `Store URL has regional/localization parameter(s) — remove for global delivery: ` +
+          `${u} → ${params.join(', ')}`,
+      );
+    }
+  }
+
   // AppLovin "Axon" playable-analytics events are authored in the game source
   // (the packager never injects them) and end up base64-zipped in the final
   // HTML — invisible to a plaintext scan. Extract them once from the build
@@ -92,6 +105,14 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
       // URL (e.g. Unity) but none was found in the build. We don't abort — the
       // missing URL will surface at the network's own validation step.
       const warnings: string[] = [];
+
+      // Regional store-URL params — applies to every network shipping the URL.
+      for (const w of regionalWarnings) {
+        warnings.push(w);
+        console.warn(`[plbx] ${network.name}: ${w}`);
+        options.onProgress?.(networkId, 'processing', w);
+      }
+
       if (network.requiresStoreUrl && !hasGooglePlayUrl) {
         const w =
           `${network.name}: no Google Play Store URL found in the build — the network validator ` +

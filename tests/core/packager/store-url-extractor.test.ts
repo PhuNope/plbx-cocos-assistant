@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import { join } from 'path';
-import { extractStoreUrls } from '../../../src/core/packager/store-url-extractor';
+import { extractStoreUrls, detectRegionalParams } from '../../../src/core/packager/store-url-extractor';
 
 let tmpDir: string;
 
@@ -129,5 +129,37 @@ describe('extractStoreUrls', () => {
     expect(extractStoreUrls(dir)).toEqual([
       'https://play.google.com/store/apps/details?id=com.x',
     ]);
+  });
+});
+
+describe('detectRegionalParams', () => {
+  it('flags Google Play gl/hl localization params', () => {
+    expect(
+      detectRegionalParams('https://play.google.com/store/apps/details?id=com.x&gl=US&hl=en'),
+    ).toEqual(['gl=US', 'hl=en']);
+  });
+
+  it('returns [] for a clean Google Play URL', () => {
+    expect(detectRegionalParams('https://play.google.com/store/apps/details?id=com.x')).toEqual([]);
+  });
+
+  it('flags the Apple App Store country-code path segment', () => {
+    const r = detectRegionalParams('https://apps.apple.com/us/app/foo/id123');
+    expect(r.join(' ')).toContain('us');
+  });
+
+  it('flags the country-code path for itunes.apple.com too', () => {
+    const r = detectRegionalParams('https://itunes.apple.com/ge/app/foo/id123');
+    expect(r.join(' ')).toContain('ge');
+  });
+
+  it('flags Apple l/country query params', () => {
+    const r = detectRegionalParams('https://apps.apple.com/app/foo/id123?l=en&country=us');
+    expect(r).toContain('l=en');
+    expect(r).toContain('country=us');
+  });
+
+  it('returns [] for an Apple URL without a country path or params', () => {
+    expect(detectRegionalParams('https://apps.apple.com/app/foo/id123')).toEqual([]);
   });
 });

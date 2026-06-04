@@ -212,12 +212,11 @@ export function validateAxonEvents(usage: AxonUsage): AxonCheck[] {
   return checks;
 }
 
-// Events that must fire exactly once. The lifecycle one-shots plus
-// CHALLENGE_STARTED (sent only on the user's first click). Excluded: the other
-// CHALLENGE_* (legitimately repeat across retries) and CTA_CLICKED (user-driven —
-// a user may click the CTA multiple times). The spec's "Deduped: Yes" only means
-// the backend collapses duplicates in reporting, not that re-firing is an error.
-const DEDUP_ONCE_EVENTS = ['LOADING', 'LOADED', 'DISPLAYED', 'ENDCARD_SHOWN', 'CHALLENGE_STARTED'];
+// Events that must fire exactly once (spec: "Deduped: Yes"). The lifecycle
+// one-shots plus CHALLENGE_STARTED (sent only on the user's first click) and
+// CTA_CLICKED. Excluded: the other CHALLENGE_* events, which legitimately repeat
+// across retries.
+const DEDUP_ONCE_EVENTS = ['LOADING', 'LOADED', 'DISPLAYED', 'ENDCARD_SHOWN', 'CHALLENGE_STARTED', 'CTA_CLICKED'];
 
 // AppLovin forbids dispatching CHALLENGE_* events simultaneously: any two must be
 // at least this far apart (client requirement). CHALLENGE_* must mark distinct
@@ -252,8 +251,10 @@ const ORDER_PAIRS: ReadonlyArray<readonly [string, string]> = [
  * Validate a runtime fire SEQUENCE (ordered, with repeats) against the spec.
  * Superset of validateAxonEvents — adds the checks that only a live run can make
  * (lifecycle order, no duplicate one-shot fires) plus an aggregate roll-up. Used
- * by the preview validator; the package-time gate uses validateAxonEvents (a
- * static scan can't know order or fire counts).
+ * The package-time gate uses validateAxonEvents (a static scan can't know order
+ * or fire counts). This is the unit-tested reference for the runtime rules; the
+ * preview panel (static/preview/preview.js, computeAxonChecks) mirrors it in
+ * browser JS — keep the two in sync.
  *
  * @param sequence ordered event names (with repeats) as they fired
  * @param timestamps optional ms timestamps aligned to `sequence`; when present,

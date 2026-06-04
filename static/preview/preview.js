@@ -75,12 +75,9 @@
   var currentDevice = DEFAULT_DEVICE;
   var isLandscape = false;
   var audioMuted = false;
-  var axonExpected = [];   // canonical spec event list (from /api/networks)
   var axonFired = {};      // { eventName: count }
   var axonSequence = [];   // ordered fire log (with repeats) for spec validation
-  var axonTimestamps = [];  // ms timestamps aligned to axonSequence (CHALLENGE_* spacing)
-  var axonChecks = [];     // verdicts from /api/axon-validate
-  var axonValidateTimer = null;
+  var axonTimestamps = []; // ms timestamps aligned to axonSequence (CHALLENGE_* spacing)
   var currentValidatorUrl = null;
   // MolocoV2 state
   var isMolocoV2 = false;
@@ -201,30 +198,103 @@
   // ========== AXON EVENTS ==========
   var isAxonNetwork = false;
 
-  // Spec conformance is validated server-side by validateAxonSequence()
-  // (src/core/packager/axon-events.ts \u2014 the unit-tested single source of truth):
-  // lifecycle order, dedup of one-shot events, required set, valid names, and an
-  // aggregate "all conform" roll-up. We debounce-post the fire sequence to it.
-  function scheduleAxonValidate() {
-    if (axonValidateTimer) clearTimeout(axonValidateTimer);
-    axonValidateTimer = setTimeout(requestAxonValidate, 200);
+  // Spec conformance checklist \u2014 computed client-side from the fired sequence so
+  // it ALWAYS renders (no async dependency). Mirrors validateAxonSequence() in
+  // src/core/packager/axon-events.ts (the unit-tested authority) \u2014 KEEP IN SYNC.
+  var AXON_SPEC_EVENTS = [
+    'LOADING', 'LOADED', 'DISPLAYED', 'CHALLENGE_STARTED', 'CHALLENGE_FAILED', 'CHALLENGE_RETRY',
+    'CHALLENGE_PASS_25', 'CHALLENGE_PASS_50', 'CHALLENGE_PASS_75', 'CHALLENGE_SOLVED', 'CTA_CLICKED', 'ENDCARD_SHOWN',
+  ];
+  var AXON_DEDUP_ONCE = ['LOADING', 'LOADED', 'DISPLAYED', 'ENDCARD_SHOWN', 'CHALLENGE_STARTED', 'CTA_CLICKED'];
+  var AXON_CHALLENGE_COMPLETION = ['CHALLENGE_SOLVED', 'CHALLENGE_FAILED', 'CHALLENGE_RETRY'];
+  var AXON_ORDER_PAIRS = [
+    ['LOADING', 'LOADED'], ['LOADING', 'DISPLAYED'], ['LOADED', 'DISPLAYED'],
+    ['DISPLAYED', 'CHALLENGE_STARTED'],
+    ['CHALLENGE_STARTED', 'CHALLENGE_PASS_25'], ['CHALLENGE_STARTED', 'CHALLENGE_PASS_50'],
+    ['CHALLENGE_STARTED', 'CHALLENGE_PASS_75'], ['CHALLENGE_STARTED', 'CHALLENGE_SOLVED'],
+    ['CHALLENGE_STARTED', 'CHALLENGE_FAILED'], ['CHALLENGE_STARTED', 'CHALLENGE_RETRY'],
+    ['CHALLENGE_PASS_25', 'CHALLENGE_PASS_50'], ['CHALLENGE_PASS_50', 'CHALLENGE_PASS_75'],
+    ['DISPLAYED', 'ENDCARD_SHOWN'], ['DISPLAYED', 'CTA_CLICKED'], ['CHALLENGE_SOLVED', 'ENDCARD_SHOWN'],
+  ];
+  var AXON_MIN_CHALLENGE_MS = 50;
+  function isChallengeEvt(n) { return n.indexOf('CHALLENGE_') === 0; }
+
+  function computeAxonChecks() {
+    // Before anything fires: a pending checklist so the user sees what's checked.
+    if (axonSequence.length === 0) {
+      return [
+        { id: 'all_conformant', label: 'Waiting for events\u2026', status: 'pending' },
+        { id: 'displayed', label: 'DISPLAYED fired (required)', status: 'pending' },
+        { id: 'no_unknown', label: 'Valid spec event names', status: 'pending' },
+        { id: 'order', label: 'Lifecycle call order', status: 'pending' },
+        { id: 'dedup', label: 'No duplicate fire-once events', status: 'pending' },
+        { id: 'challenge_spacing', label: 'CHALLENGE_* \u226550ms apart', status: 'pending' },
+      ];
+    }
+
+    var checks = [];
+    var has = {};
+    axonSequence.forEach(function(e) { has[e] = true; });
+    var specSet = {};
+    AXON_SPEC_EVENTS.forEach(function(e) { specSet[e] = true; });
+
+    checks.push({ id: 'displayed', label: 'DISPLAYED fired (required)', ok: !!has['DISPLAYED'], level: 'warn',
+      detail: 'DISPLAYED is the only mandatory Axon event.' });
+
+    var unknown = Object.keys(has).filter(function(e) { return !specSet[e]; });
+    checks.push({ id: 'no_unknown', label: 'Valid spec event names', ok: unknown.length === 0, level: 'error',
+      detail: 'AppLovin rejects custom event names: ' + unknown.join(', ') });
+
+    if (has['LOADING']) {
+      checks.push({ id: 'loaded', label: 'LOADED fired (required with LOADING)', ok: !!has['LOADED'], level: 'warn',
+        detail: 'LOADED must fire once LOADING is used.' });
+    }
+    if (has['CHALLENGE_STARTED']) {
+      var done = AXON_CHALLENGE_COMPLETION.some(function(e) { return has[e]; });
+      checks.push({ id: 'challenge_completion', label: 'Challenge completion fired', ok: done, level: 'warn',
+        detail: 'Fire one of CHALLENGE_SOLVED / FAILED / RETRY.' });
+    }
+
+    var firstIdx = {};
+    axonSequence.forEach(function(e, i) { if (firstIdx[e] === undefined) firstIdx[e] = i; });
+    var ov = [];
+    AXON_ORDER_PAIRS.forEach(function(p) {
+      if (firstIdx[p[0]] !== undefined && firstIdx[p[1]] !== undefined && firstIdx[p[0]] > firstIdx[p[1]]) {
+        ov.push(p[0] + ' should precede ' + p[1]);
+      }
+    });
+    checks.push({ id: 'order', label: 'Lifecycle call order', ok: ov.length === 0, level: 'warn',
+      detail: 'out of order \u2014 ' + ov.join(', ') });
+
+    var counts = {};
+    axonSequence.forEach(function(e) { counts[e] = (counts[e] || 0) + 1; });
+    var dups = AXON_DEDUP_ONCE.filter(function(e) { return counts[e] > 1; });
+    checks.push({ id: 'dedup', label: 'Fire-once events fired once', ok: dups.length === 0, level: 'warn',
+      detail: 'fired more than once \u2014 ' + dups.map(function(e) { return e + '\u00d7' + counts[e]; }).join(', ') });
+
+    var chal = [];
+    axonSequence.forEach(function(e, i) { if (isChallengeEvt(e)) chal.push({ e: e, ts: axonTimestamps[i] }); });
+    if (chal.length >= 2) {
+      var close = [];
+      for (var i = 1; i < chal.length; i++) {
+        var dt = chal[i].ts - chal[i - 1].ts;
+        if (dt < AXON_MIN_CHALLENGE_MS) close.push(chal[i - 1].e + '\u2192' + chal[i].e + ' ' + Math.round(dt) + 'ms');
+      }
+      checks.push({ id: 'challenge_spacing', label: 'CHALLENGE_* \u226550ms apart', ok: close.length === 0, level: 'warn',
+        detail: 'fired too close (no simultaneous CHALLENGE_*) \u2014 ' + close.join(', ') });
+    }
+
+    var failures = checks.filter(function(c) { return !c.ok; });
+    checks.unshift({ id: 'all_conformant',
+      label: failures.length === 0 ? 'All events conform to spec' : (failures.length + ' spec issue(s)'),
+      ok: failures.length === 0,
+      level: failures.some(function(c) { return c.level === 'error'; }) ? 'error' : 'warn',
+      detail: failures.map(function(c) { return c.label; }).join('; ') });
+    return checks;
   }
 
-  function requestAxonValidate() {
-    if (!isAxonNetwork) return;
-    if (axonSequence.length === 0) { axonChecks = []; renderAxonVerdicts(); return; }
-    fetch('/api/axon-validate?events=' + encodeURIComponent(axonSequence.join(',')) +
-          '&ts=' + encodeURIComponent(axonTimestamps.join(',')))
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        axonChecks = (data && data.checks) || [];
-        renderAxonVerdicts();
-      })
-      .catch(function() { /* validation endpoint unavailable \u2014 leave verdicts as-is */ });
-  }
-
-  // Map a server check { ok, level } to a verdict status class.
   function axonCheckStatus(check) {
+    if (check.status) return check.status; // explicit (pending)
     if (check.ok) return 'pass';
     return check.level === 'error' ? 'fail' : 'warn';
   }
@@ -234,29 +304,18 @@
     if (!container) return;
     while (container.firstChild) container.removeChild(container.firstChild);
 
-    if (axonChecks.length === 0) {
-      var none = document.createElement('div');
-      none.className = 'axon-verdict warn';
-      var ni = document.createElement('span'); ni.className = 'icon'; ni.textContent = '!';
-      var nt = document.createElement('span'); nt.className = 'text';
-      nt.textContent = 'No Axon event fired yet \u2014 DISPLAYED is required by the spec';
-      none.appendChild(ni); none.appendChild(nt);
-      container.appendChild(none);
-      return;
-    }
-
-    axonChecks.forEach(function(check) {
+    computeAxonChecks().forEach(function(check) {
       var status = axonCheckStatus(check);
       var div = document.createElement('div');
       div.className = 'axon-verdict ' + status + (check.id === 'all_conformant' ? ' aggregate' : '');
       var icon = document.createElement('span');
       icon.className = 'icon';
-      icon.textContent = status === 'pass' ? '\u2713' : status === 'fail' ? '\u2717' : '!';
+      icon.textContent = status === 'pass' ? '\u2713' : status === 'fail' ? '\u2717' : status === 'pending' ? '\u00b7' : '!';
       div.appendChild(icon);
       var text = document.createElement('span');
       text.className = 'text';
       text.textContent = check.label;
-      if (!check.ok && check.detail) {
+      if (status !== 'pass' && status !== 'pending' && check.detail) {
         var d = document.createElement('span');
         d.className = 'detail';
         d.textContent = check.detail;
@@ -268,18 +327,18 @@
   }
 
   function renderAxonEvents() {
-    var section = document.getElementById('axon-section');
+    var sidebar = document.getElementById('axon-sidebar');
     var container = document.getElementById('axon-events');
     var emptyMsg = document.getElementById('axon-empty');
-    if (!section || !container) return;
+    if (!container) return;
 
-    // Only show for AppLovin
+    // Left sidebar only shown for AppLovin (Axon is AppLovin-specific).
     if (!isAxonNetwork) {
-      section.style.display = 'none';
+      if (sidebar) sidebar.style.display = 'none';
       return;
     }
 
-    section.style.display = '';
+    if (sidebar) sidebar.style.display = '';
     renderAxonVerdicts();
     while (container.firstChild) container.removeChild(container.firstChild);
 
@@ -291,12 +350,12 @@
     }
     emptyMsg.style.display = 'none';
 
-    var ordered = axonExpected.filter(function(e) { return axonFired[e] > 0; });
+    var ordered = AXON_SPEC_EVENTS.filter(function(e) { return axonFired[e] > 0; });
     fired.forEach(function(e) { if (ordered.indexOf(e) === -1) ordered.push(e); });
 
     ordered.forEach(function(name) {
       var count = axonFired[name] || 0;
-      var isSpec = axonExpected.indexOf(name) !== -1;
+      var isSpec = AXON_SPEC_EVENTS.indexOf(name) !== -1;
       var div = document.createElement('div');
       div.className = 'axon-event fired';
 
@@ -435,13 +494,11 @@
         net.hasAppStoreUrl ? 'Found in build' : 'MISSING — set via set_app_store_url(...) in game code');
     }
 
-    // Axon Events (AppLovin): the canonical spec event list comes from the
-    // server (/api/networks). Runtime-fired events are checked against it.
-    axonExpected = (net && net.axonEvents) || [];
+    // Axon Events (AppLovin): runtime-fired events are checked client-side
+    // against the spec (computeAxonChecks). Reset per network switch.
     axonFired = {};
     axonSequence = [];
     axonTimestamps = [];
-    axonChecks = [];
     isAxonNetwork = (id === 'applovin');
     renderAxonEvents();
 
@@ -469,14 +526,15 @@
 
   // ========== CTA TOAST ==========
   var ctaToastTimer = null;
-  function showCtaToast(method) {
+  function showCtaToast(method, bad) {
     var toast = document.getElementById('cta-toast');
     if (!toast) return;
     toast.textContent = 'CTA Clicked' + (method ? ' — ' + method : '');
-    toast.className = 'cta-toast visible';
+    // Red when the click won't be tracked by the network (e.g. bare window.open).
+    toast.className = 'cta-toast visible' + (bad ? ' bad' : '');
     clearTimeout(ctaToastTimer);
     ctaToastTimer = setTimeout(function() {
-      toast.className = 'cta-toast fade-out';
+      toast.className = 'cta-toast fade-out' + (bad ? ' bad' : '');
       setTimeout(function() { toast.className = 'cta-toast'; }, 400);
     }, 1500);
   }
@@ -506,7 +564,7 @@
         // show it as a warning, not a green pass, so the preview tells the truth.
         if (data.correct === false) {
           setCheck('cta', 'warn', (data.method || 'called') + " won't track — " + (data.expected || '?') + ' expected');
-          showCtaToast((data.method || 'CTA') + ' (won\'t track)');
+          showCtaToast((data.method || 'CTA') + ' (won\'t track)', true);
         } else {
           setCheck('cta', 'pass', data.method || 'called');
           showCtaToast(data.method);
@@ -523,7 +581,6 @@
           axonTimestamps.push(typeof data.ts === 'number' ? data.ts : Date.now());
           log('Axon: ' + data.name + ' (×' + axonFired[data.name] + ')', 'cta');
           renderAxonEvents();
-          scheduleAxonValidate();
         }
         break;
       case 'macro_fire':

@@ -72,13 +72,26 @@ function _trySplashHide() {
 window.plbx_html = window.plbx_html || {};
 window.plbx_html.google_play_url = window.plbx_html.google_play_url || "";
 window.plbx_html.appstore_url = window.plbx_html.appstore_url || "";
+var _lastDownloadAt = 0;
 window.plbx_html.download = function(url) {
+  // Collapse double-fire: a single CTA tap reaches us through more than one path
+  // (super_html + plbx_html aliases, or touch + the synthesized click some
+  // webviews dispatch) within a few ms. fire('click') is already debounced so the
+  // click BEACON fired once, but mraid.open() was not gated — so one tap opened
+  // the store twice. Gate the whole CTA on the same window: one click => one
+  // click beacon + one mraid.open. A real second deliberate tap is >100ms away.
+  var now = Date.now();
+  if (_lastDownloadAt && (now - _lastDownloadAt) < FIRE_DEBOUNCE_MS) return;
+  _lastDownloadAt = now;
   // CTA fires click only. Engagement is a behavioral signal driven by tap()
   // threshold — firing it from download too would double-count every CTA press.
   fire('click');
   try {
-    var dest = M.final_url ? decode(M.final_url) : (url || "");
-    if (window.mraid && dest) { mraid.open(dest); }
+    // Redirect target precedence per spec §2.4: final_url, else fall back to the
+    // click URL, else the game-passed url. mraid.open() must fire even when all
+    // are empty (§2.4 "If both final_url & click are empty" → still open).
+    var dest = decode(M.final_url) || decode(M.click) || (url || "");
+    if (window.mraid) { mraid.open(dest); }
     else if (dest) { window.open(dest, '_blank'); }
   } catch(e) {}
 };

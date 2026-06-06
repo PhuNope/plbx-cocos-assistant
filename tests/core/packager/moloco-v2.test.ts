@@ -8,6 +8,8 @@ import {
 } from '../../../src/core/packager/launcher-builder';
 import { join } from 'path';
 import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'fs';
+import vm from 'vm';
+import { MolocoV2Adapter } from '../../../src/core/packager/network-adapters/moloco-v2';
 
 const FIXTURES = join(__dirname, '../../fixtures');
 const MOCK_BUILD = join(FIXTURES, 'mock-build-mv2');
@@ -382,5 +384,63 @@ describe('validateLauncher (spec compliance gate)', () => {
   it('flags IMP_BEACON that is not last before </body>', () => {
     const bad = buildLauncher(baseOpts).replace('%{IMP_BEACON}</body>', '%{IMP_BEACON}<div></div></body>');
     expect(fail(bad, 'imp_beacon')).toBeTruthy();
+  });
+});
+
+describe('molocoV2 bridge — CTA fire & final_url fallback (§2.4)', () => {
+  // Evaluate the real payload bridge in a sandbox with a fake window/mraid so we
+  // can drive plbx_html.download() and observe mraid.open() + click beacons.
+  function runBridge(macros: Record<string, string>) {
+    const adapter = new MolocoV2Adapter('molocoV2', {} as any);
+    const bridge: string = (adapter as any).getPlbxBridge({});
+    const opens: string[] = [];
+    const beacons: string[] = [];
+    const mraid = {
+      open: (u: string) => opens.push(u),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      getState: () => 'default',
+      isViewable: () => true,
+      getAudioVolume: () => 100,
+    };
+    class FakeImage {
+      set src(v: string) {
+        beacons.push(v);
+      }
+    }
+    const win: any = { mraid, MOLOCO_MACROS: macros, open: () => {} };
+    const ctx: any = {
+      window: win,
+      mraid,
+      Image: FakeImage,
+      Date,
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      console,
+      decodeURIComponent,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(bridge, ctx);
+    return { win, opens, beacons };
+  }
+
+  it('fires the CTA once per click even when download() is called twice (double-fire collapse)', () => {
+    const { win, opens, beacons } = runBridge({ final_url: 'https://final', click: 'https://click' });
+    win.plbx_html.download();
+    win.plbx_html.download(); // same tap re-dispatched via super_html alias / synthesized click
+    expect(opens).toEqual(['https://final']); // one mraid.open, final_url precedence
+    expect(beacons.filter((b) => b === 'https://click')).toHaveLength(1); // one click beacon
+  });
+
+  it('falls back to click when final_url is empty (§2.4)', () => {
+    const { win, opens } = runBridge({ final_url: '', click: 'https://click' });
+    win.plbx_html.download();
+    expect(opens).toEqual(['https://click']);
+  });
+
+  it('still triggers mraid.open() when both final_url and click are empty (§2.4)', () => {
+    const { win, opens } = runBridge({ final_url: '', click: '' });
+    win.plbx_html.download();
+    expect(opens).toEqual(['']); // mraid.open fired regardless of value
   });
 });

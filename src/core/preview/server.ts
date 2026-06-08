@@ -1,5 +1,5 @@
 import http from 'http';
-import { join, extname } from 'path';
+import { join, extname, basename } from 'path';
 import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import JSZip from 'jszip';
 import { generatePreviewUtil } from './sdk-mocks';
@@ -48,14 +48,23 @@ function findBuildFile(outputDir: string, networkId: string): BuildFile | null {
   return null;
 }
 
-async function extractHtmlFromZip(zipPath: string): Promise<string> {
+export async function extractHtmlFromZip(zipPath: string): Promise<string> {
   const data = readFileSync(zipPath);
   const zip = await JSZip.loadAsync(data);
-  const indexFile = zip.file('index.html');
-  if (!indexFile) {
-    throw new Error('No index.html found in ZIP: ' + zipPath);
+  // Prefer index.html; then the HTML named after the .zip basename — Mintegral's
+  // 2026 zip-naming requirement names the inner HTML after the outer .zip (e.g.
+  // web-mobile-001.zip → web-mobile-001.html), so index.html is absent; then any
+  // root-level .html, then any .html anywhere in the archive.
+  const zipBase = basename(zipPath, extname(zipPath));
+  const htmlFile =
+    zip.file('index.html') ||
+    zip.file(`${zipBase}.html`) ||
+    zip.file(/^[^/]+\.html$/i)[0] ||
+    zip.file(/\.html$/i)[0];
+  if (!htmlFile) {
+    throw new Error('No HTML file found in ZIP: ' + zipPath);
   }
-  return indexFile.async('string');
+  return htmlFile.async('string');
 }
 
 /** Substrings identifying store URLs — what validators (e.g. Unity Creative

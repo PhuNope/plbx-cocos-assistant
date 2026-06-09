@@ -7,8 +7,6 @@ dist/
 .superpowers/
 .playwright-mcp/
 
-# Internal docs (plans, research, specs)
-docs/
 
 # Root-level debug/test artifacts
 /*.log

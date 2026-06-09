@@ -100,7 +100,7 @@ export const load = function () {
       } else if (verdict.state === 'unknown') {
         console.log('[plbx] freshness check skipped:', verdict.reason);
       } else {
-        console.log('[plbx] extension up to date with', verdict.branch);
+        console.log('[plbx] extension version status:', verdict.state, 'v' + verdict.localVersion);
       }
     })
     .catch((e) => console.log('[plbx] freshness check failed:', e?.message || e));
@@ -748,7 +748,7 @@ export const methods: Record<string, (...args: any[]) => any> = {
       return await getFreshness(force === true);
     } catch (e: any) {
       return {
-        verdict: { state: 'unknown', behindBy: 0, aheadBy: 0, local: '', branch: '', dirty: false, reason: e?.message || String(e) },
+        verdict: { state: 'unknown', localVersion: '', latestVersion: '', reason: e?.message || String(e) },
         action: { notify: false, severity: 'info', message: '' },
       };
     }

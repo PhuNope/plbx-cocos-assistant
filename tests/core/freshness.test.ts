@@ -1,284 +1,133 @@
 import { describe, it, expect } from 'vitest';
 import {
+  compareSemver,
+  pickLatestTag,
   classify,
   decideAction,
   checkFreshness,
   formatCheckResult,
-  parseSlug,
-  stripRemoteRef,
 } from '../../src/core/freshness/freshness-check';
 
-const verdict = (over: Partial<import('../../src/core/freshness/freshness-check').FreshnessVerdict> = {}) => ({
-  state: 'fresh' as const,
-  behindBy: 0,
-  aheadBy: 0,
-  local: 'abc1234',
-  branch: 'master',
-  dirty: false,
-  ...over,
-});
-
-describe('parseSlug', () => {
-  it('parses SSH remote url', () => {
-    expect(parseSlug('git@github.com:playbox-org/plbx-cocos-assistant.git')).toBe(
-      'playbox-org/plbx-cocos-assistant',
-    );
+describe('compareSemver', () => {
+  it('orders by major/minor/patch', () => {
+    expect(compareSemver('0.2.12', '0.2.13')).toBeLessThan(0);
+    expect(compareSemver('0.2.13', '0.2.12')).toBeGreaterThan(0);
+    expect(compareSemver('0.2.12', '0.2.12')).toBe(0);
+    expect(compareSemver('0.10.0', '0.9.9')).toBeGreaterThan(0); // numeric, not lexicographic
+    expect(compareSemver('1.0.0', '0.99.99')).toBeGreaterThan(0);
   });
-  it('parses HTTPS remote url', () => {
-    expect(parseSlug('https://github.com/playbox-org/plbx-cocos-assistant.git')).toBe(
-      'playbox-org/plbx-cocos-assistant',
-    );
-  });
-  it('returns null for non-github url', () => {
-    expect(parseSlug('git@gitlab.com:foo/bar.git')).toBeNull();
+  it('tolerates a leading v', () => {
+    expect(compareSemver('v0.2.13', '0.2.12')).toBeGreaterThan(0);
   });
 });
 
-describe('stripRemoteRef', () => {
-  it('drops only the remote segment, keeps slashed branch name', () => {
-    expect(stripRemoteRef('refs/remotes/origin/design/panel-ui-mockups')).toBe(
-      'design/panel-ui-mockups',
-    );
+describe('pickLatestTag', () => {
+  it('returns the max semver tag, not the first listed', () => {
+    expect(pickLatestTag(['v0.2.11', 'v0.2.13', 'v0.2.12'])).toBe('v0.2.13');
   });
-  it('handles simple branch', () => {
-    expect(stripRemoteRef('refs/remotes/origin/master')).toBe('master');
+  it('ignores non-semver tags', () => {
+    expect(pickLatestTag(['snapshot', 'v0.2.9', 'release-candidate'])).toBe('v0.2.9');
   });
-  it('returns null for unexpected ref shape', () => {
-    expect(stripRemoteRef('refs/heads/master')).toBeNull();
+  it('returns null when nothing parses', () => {
+    expect(pickLatestTag(['foo', 'bar'])).toBeNull();
+    expect(pickLatestTag([])).toBeNull();
   });
 });
 
-describe('classify', () => {
-  const base = {
-    dirty: false,
-    branch: 'master',
-    local: 'abc1234',
-    compare: null as any,
-  };
-
-  it('unknown when local HEAD missing', () => {
-    expect(classify({ ...base, local: null }).state).toBe('unknown');
-  });
-  it('unknown when no upstream branch', () => {
-    expect(classify({ ...base, branch: null }).state).toBe('unknown');
-  });
-  it('unknown when compare unavailable (network/404)', () => {
-    expect(classify({ ...base, compare: null }).state).toBe('unknown');
-  });
-  it('maps identical → fresh', () => {
-    expect(
-      classify({ ...base, compare: { status: 'identical', ahead_by: 0, behind_by: 0 } }).state,
-    ).toBe('fresh');
-  });
-  it('maps behind → behind, surfaces behindBy', () => {
-    const v = classify({ ...base, compare: { status: 'behind', ahead_by: 0, behind_by: 3 } });
+describe('classify (version model)', () => {
+  it('behind when the latest published tag is newer', () => {
+    const v = classify({ localVersion: '0.2.12', latestTag: 'v0.2.13' });
     expect(v.state).toBe('behind');
-    expect(v.behindBy).toBe(3);
+    expect(v.latestVersion).toBe('0.2.13');
   });
-  it('maps diverged → diverged', () => {
-    expect(
-      classify({ ...base, compare: { status: 'diverged', ahead_by: 2, behind_by: 5 } }).state,
-    ).toBe('diverged');
+  it('fresh when versions match', () => {
+    expect(classify({ localVersion: '0.2.13', latestTag: 'v0.2.13' }).state).toBe('fresh');
   });
-  it('passes the dirty flag through to the verdict', () => {
-    const v = classify({
-      ...base,
-      dirty: true,
-      compare: { status: 'behind', ahead_by: 0, behind_by: 1 },
-    });
-    expect(v.dirty).toBe(true);
+  it('ahead when local version is newer than any published tag (pre-release dev)', () => {
+    expect(classify({ localVersion: '0.2.14', latestTag: 'v0.2.13' }).state).toBe('ahead');
+  });
+  it('unknown when tags could not be fetched', () => {
+    const v = classify({ localVersion: '0.2.12', latestTag: null });
+    expect(v.state).toBe('unknown');
+    expect(v.reason).toBeTruthy();
+  });
+  it('unknown when local version is missing', () => {
+    expect(classify({ localVersion: '', latestTag: 'v0.2.13' }).state).toBe('unknown');
   });
 });
 
 describe('decideAction', () => {
-  it('notifies when behind, mentioning the count', () => {
-    const a = decideAction({
-      state: 'behind',
-      behindBy: 3,
-      aheadBy: 0,
-      local: 'abc',
-      branch: 'master',
-      dirty: false,
-    });
+  it('notifies on behind with both versions in the message', () => {
+    const a = decideAction(classify({ localVersion: '0.2.12', latestTag: 'v0.2.13' }));
     expect(a.notify).toBe(true);
-    expect(a.message).toContain('3');
+    expect(a.severity).toBe('warn');
+    expect(a.message).toContain('0.2.13');
+    expect(a.message).toContain('0.2.12');
   });
-  it('stays silent when fresh', () => {
-    const a = decideAction({
-      state: 'fresh',
-      behindBy: 0,
-      aheadBy: 0,
-      local: 'abc',
-      branch: 'master',
-      dirty: false,
-    });
-    expect(a.notify).toBe(false);
-  });
-  it('stays silent when working tree is dirty (no nagging mid-edit)', () => {
-    const a = decideAction({
-      state: 'behind',
-      behindBy: 3,
-      aheadBy: 0,
-      local: 'abc',
-      branch: 'master',
-      dirty: true,
-    });
-    expect(a.notify).toBe(false);
+  it('stays silent on fresh / ahead / unknown', () => {
+    for (const v of [
+      classify({ localVersion: '1.0.0', latestTag: 'v1.0.0' }),
+      classify({ localVersion: '1.0.1', latestTag: 'v1.0.0' }),
+      classify({ localVersion: '1.0.0', latestTag: null }),
+    ]) {
+      expect(decideAction(v).notify).toBe(false);
+    }
   });
 });
 
-describe('formatCheckResult (human status for the Settings "Check" button)', () => {
-  it('fresh → up to date, names the branch', () => {
-    const s = formatCheckResult(verdict({ state: 'fresh', branch: 'master' }));
-    expect(s).toMatch(/up to date/i);
-    expect(s).toContain('master');
-  });
-  it('behind → count + branch, plural', () => {
-    const s = formatCheckResult(verdict({ state: 'behind', behindBy: 3, branch: 'master' }));
-    expect(s).toContain('3');
-    expect(s).toMatch(/behind/i);
-    expect(s).toContain('master');
-    expect(s).toContain('commits');
-  });
-  it('behind by 1 → singular commit', () => {
-    const s = formatCheckResult(verdict({ state: 'behind', behindBy: 1 }));
-    expect(s).toContain('1 commit ');
-  });
-  it('ahead → mentions ahead/unpushed', () => {
-    const s = formatCheckResult(verdict({ state: 'ahead', aheadBy: 2 }));
-    expect(s).toMatch(/ahead/i);
-    expect(s).toContain('2');
-  });
-  it('diverged → both counts', () => {
-    const s = formatCheckResult(verdict({ state: 'diverged', behindBy: 5, aheadBy: 2 }));
-    expect(s).toMatch(/diverged/i);
-    expect(s).toContain('5');
-    expect(s).toContain('2');
-  });
-  it('unknown → not a "behind" claim, surfaces it could not check', () => {
-    const s = formatCheckResult(verdict({ state: 'unknown', reason: 'offline' }));
-    expect(s).not.toMatch(/behind/i);
-    expect(s).toMatch(/could ?n.?t|unknown|unavailable/i);
+describe('formatCheckResult', () => {
+  it('covers every state with a human-readable line', () => {
+    expect(formatCheckResult(classify({ localVersion: '1.0.0', latestTag: 'v1.0.0' }))).toContain(
+      'Up to date',
+    );
+    expect(formatCheckResult(classify({ localVersion: '1.0.0', latestTag: 'v1.1.0' }))).toContain(
+      '1.1.0',
+    );
+    expect(formatCheckResult(classify({ localVersion: '1.1.0', latestTag: 'v1.0.0' }))).toContain(
+      'newer',
+    );
+    expect(formatCheckResult(classify({ localVersion: '1.0.0', latestTag: null }))).toContain(
+      "Couldn't check",
+    );
   });
 });
 
 describe('checkFreshness (orchestration with injected deps)', () => {
-  const gitFake =
-    (overrides: Record<string, string> = {}) =>
-    async (args: string[]): Promise<string> => {
-      const key = args.join(' ');
-      if (key === 'rev-parse HEAD') return overrides.head ?? 'abc1234deadbeef';
-      if (key === 'rev-parse --symbolic-full-name @{u}')
-        return overrides.upstream ?? 'refs/remotes/origin/master';
-      if (key === 'status --porcelain') return overrides.status ?? '';
-      if (key === 'remote get-url origin')
-        return overrides.remote ?? 'git@github.com:playbox-org/plbx-cocos-assistant.git';
-      return '';
-    };
-
-  it('reports behind from git + compare', async () => {
+  it('combines local version + fetched tags', async () => {
     const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: gitFake(),
-      fetchCompare: async () => ({ status: 'behind', ahead_by: 0, behind_by: 2 }),
+      getLocalVersion: () => '0.2.12',
+      fetchTags: async () => ['v0.2.13', 'v0.2.12', 'v0.2.11'],
     });
     expect(v.state).toBe('behind');
-    expect(v.behindBy).toBe(2);
-    expect(v.dirty).toBe(false);
+    expect(v.localVersion).toBe('0.2.12');
+    expect(v.latestVersion).toBe('0.2.13');
   });
 
-  it('marks dirty when status --porcelain is non-empty', async () => {
+  it('degrades to unknown when the tag fetch fails', async () => {
     const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: gitFake({ status: ' M src/main.ts\n' }),
-      fetchCompare: async () => ({ status: 'behind', ahead_by: 0, behind_by: 2 }),
-    });
-    expect(v.dirty).toBe(true);
-  });
-
-  it('reports unknown when compare fetch fails (returns null)', async () => {
-    const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: gitFake(),
-      fetchCompare: async () => null,
+      getLocalVersion: () => '0.2.12',
+      fetchTags: async () => null,
     });
     expect(v.state).toBe('unknown');
   });
 
-  it('falls back to origin default branch when there is no upstream (detached HEAD / local branch)', async () => {
-    // Real case: user checks out an old commit (detached) or a local branch
-    // without upstream — rev-parse @{u} fails. The check must still compare
-    // against the origin default branch instead of giving up with 'unknown'.
-    const calls: any[] = [];
+  it('degrades to unknown when reading the local version throws', async () => {
     const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: async (args: string[]) => {
-        const key = args.join(' ');
-        if (key === 'rev-parse --symbolic-full-name @{u}') throw new Error('no upstream');
-        if (key === 'rev-parse --abbrev-ref origin/HEAD') return 'origin/master';
-        if (key === 'rev-parse HEAD') return 'abc1234';
-        if (key === 'remote get-url origin')
-          return 'git@github.com:playbox-org/plbx-cocos-assistant.git';
-        return '';
+      getLocalVersion: () => {
+        throw new Error('no package.json');
       },
-      fetchCompare: async (slug: string, base: string, head: string) => {
-        calls.push({ slug, base, head });
-        return { status: 'behind', ahead_by: 0, behind_by: 3 };
-      },
-    });
-    expect(calls[0]).toEqual({
-      slug: 'playbox-org/plbx-cocos-assistant',
-      base: 'master',
-      head: 'abc1234',
-    });
-    expect(v.state).toBe('behind');
-    expect(v.behindBy).toBe(3);
-  });
-
-  it("falls back to 'master' when even origin/HEAD is unresolved but origin exists", async () => {
-    const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: async (args: string[]) => {
-        const key = args.join(' ');
-        if (key === 'rev-parse --symbolic-full-name @{u}') throw new Error('no upstream');
-        if (key === 'rev-parse --abbrev-ref origin/HEAD') throw new Error('no origin/HEAD ref');
-        if (key === 'rev-parse HEAD') return 'abc1234';
-        if (key === 'remote get-url origin')
-          return 'git@github.com:playbox-org/plbx-cocos-assistant.git';
-        return '';
-      },
-      fetchCompare: async () => ({ status: 'behind', ahead_by: 0, behind_by: 1 }),
-    });
-    expect(v.state).toBe('behind');
-  });
-
-  it('reports unknown when there is no upstream AND no origin remote', async () => {
-    const v = await checkFreshness({
-      repoRoot: '/repo',
-      runGit: async (args: string[]) => {
-        const key = args.join(' ');
-        if (key === 'rev-parse HEAD') return 'abc1234';
-        throw new Error('fail');
-      },
-      fetchCompare: async () => ({ status: 'behind', ahead_by: 0, behind_by: 2 }),
+      fetchTags: async () => ['v0.2.13'],
     });
     expect(v.state).toBe('unknown');
   });
 
-  it('passes base=remote-branch, head=local-sha to the compare API (our-perspective mapping)', async () => {
-    const calls: any[] = [];
-    await checkFreshness({
-      repoRoot: '/repo',
-      runGit: gitFake({ head: 'localsha', upstream: 'refs/remotes/origin/feature/x' }),
-      fetchCompare: async (slug: string, base: string, head: string) => {
-        calls.push({ slug, base, head });
-        return { status: 'identical', ahead_by: 0, behind_by: 0 };
-      },
+  it('does not depend on git state at all (no git dep in the contract)', async () => {
+    // Regression guard for the detached-HEAD bug: the check is now a pure
+    // version comparison — no upstream, no working tree, no git binary.
+    const v = await checkFreshness({
+      getLocalVersion: () => '0.2.13',
+      fetchTags: async () => ['v0.2.13'],
     });
-    expect(calls[0]).toEqual({
-      slug: 'playbox-org/plbx-cocos-assistant',
-      base: 'feature/x',
-      head: 'localsha',
-    });
+    expect(v.state).toBe('fresh');
   });
 });

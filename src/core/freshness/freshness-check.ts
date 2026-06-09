@@ -1,37 +1,31 @@
 /**
- * Self-update freshness check.
+ * Self-update freshness check — version-tag model.
  *
- * The extension is installed via Cocos "Development Import" — a symlink straight
- * into this git working tree. So at runtime it can ask git about its own state
- * and compare against the public GitHub repo to tell the developer when their
- * checkout is behind.
+ * The extension is installed via Cocos "Development Import" (a symlink into a
+ * git checkout). Earlier versions asked git about the checkout state and hit
+ * the GitHub compare API; that broke in real dev situations (detached HEAD,
+ * local branch without upstream, git missing from the editor's GUI PATH).
  *
- * Design:
- *  - `classify()`  — pure mapping of git/remote facts → a freshness state.
- *  - `decideAction()` — pure UX policy: given a verdict, do we nag, and how.
- *  - `checkFreshness()` — IO orchestrator; git + GitHub deps are injected so the
- *    logic above is unit-testable without spawning git or hitting the network.
+ * Current model is a pure version comparison:
+ *  - local side:  `version` from this checkout's package.json
+ *  - remote side: max semver tag from the GitHub /tags API (every release is
+ *    tagged `vX.Y.Z` and pushed — that IS the publish step for this repo)
  *
- * Remote side uses the GitHub *compare* REST API over plain HTTPS (the repo is
- * public, so no token / SSH key needed). We call it as `compare/{branch}...{local}`
- * — base = remote branch tip, head = local HEAD — so the returned `status`
- * reads from *our* perspective: `behind` means our checkout lacks commits.
+ * No git involvement at all. Design:
+ *  - `compareSemver` / `pickLatestTag` / `classify` — pure, unit-tested
+ *  - `decideAction` — pure UX policy (nag only when behind)
+ *  - `checkFreshness` — orchestrator with injected deps (testable without IO)
+ *  - `defaultFetchTags` / `runFreshnessCheck` — the real IO sides
  */
 
-export type FreshnessState = 'fresh' | 'behind' | 'ahead' | 'diverged' | 'unknown';
+export type FreshnessState = 'fresh' | 'behind' | 'ahead' | 'unknown';
 
 export interface FreshnessVerdict {
   state: FreshnessState;
-  /** Commits the remote branch has that our checkout lacks. */
-  behindBy: number;
-  /** Local commits not on the remote branch (unpushed). */
-  aheadBy: number;
-  /** Short local HEAD sha, or '' if unavailable. */
-  local: string;
-  /** Remote branch we compared against, or '' if none. */
-  branch: string;
-  /** Working tree had uncommitted changes at check time. */
-  dirty: boolean;
+  /** Version of this checkout (package.json), or '' if unreadable. */
+  localVersion: string;
+  /** Latest published tag's version (no leading v), or '' if unavailable. */
+  latestVersion: string;
   /** Why the state is `unknown`, for logging. */
   reason?: string;
 }
@@ -42,202 +36,135 @@ export interface FreshnessAction {
   message: string;
 }
 
-/** Shape of the GitHub `compare` API fields we consume. */
-export interface CompareResult {
-  status: string; // 'identical' | 'ahead' | 'behind' | 'diverged'
-  ahead_by: number;
-  behind_by: number;
+const SEMVER_RE = /^v?(\d+)\.(\d+)\.(\d+)$/;
+
+function parseSemver(s: string): [number, number, number] | null {
+  const m = (s || '').trim().match(SEMVER_RE);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** Numeric semver comparison; throws nothing — unparseable sides sort lowest. */
+export function compareSemver(a: string, b: string): number {
+  const pa = parseSemver(a) ?? [-1, -1, -1];
+  const pb = parseSemver(b) ?? [-1, -1, -1];
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  }
+  return 0;
+}
+
+/** Max semver tag from a tag-name list (GitHub /tags order is NOT semver). */
+export function pickLatestTag(tags: string[]): string | null {
+  let best: string | null = null;
+  for (const t of tags) {
+    if (!parseSemver(t)) continue;
+    if (best === null || compareSemver(t, best) > 0) best = t;
+  }
+  return best;
 }
 
 export interface ClassifyInput {
-  dirty: boolean;
-  /** Remote branch name (e.g. 'master', 'design/panel-ui-mockups'), or null if no upstream. */
-  branch: string | null;
-  /** Local HEAD sha, or null if git failed. */
-  local: string | null;
-  /** GitHub compare result, or null if it could not be fetched (network / 404). */
-  compare: CompareResult | null;
+  /** package.json version of this checkout, '' if unreadable. */
+  localVersion: string;
+  /** Latest published semver tag (e.g. 'v0.2.13'), or null if unavailable. */
+  latestTag: string | null;
 }
 
-/** Parse `owner/repo` out of a GitHub SSH or HTTPS remote url. Returns null if not GitHub. */
-export function parseSlug(remoteUrl: string): string | null {
-  const m = remoteUrl
-    .trim()
-    .match(/github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/);
-  if (!m) return null;
-  return `${m[1]}/${m[2]}`;
-}
-
-/**
- * `refs/remotes/<remote>/<branch...>` → `<branch...>`, dropping only the remote
- * segment so slashed branch names survive. Returns null for any other ref shape.
- */
-export function stripRemoteRef(fullRef: string): string | null {
-  const m = fullRef.trim().match(/^refs\/remotes\/[^/]+\/(.+)$/);
-  return m ? m[1] : null;
-}
-
-/** Pure: map git/remote facts to a freshness verdict. */
+/** Pure: map local/remote versions to a freshness verdict. */
 export function classify(input: ClassifyInput): FreshnessVerdict {
-  const local = input.local ?? '';
-  const branch = input.branch ?? '';
-  const dirty = input.dirty;
+  const localVersion = (input.localVersion || '').replace(/^v/, '');
+  const latestVersion = (input.latestTag || '').replace(/^v/, '');
 
-  const unknown = (reason: string): FreshnessVerdict => ({
-    state: 'unknown',
-    behindBy: 0,
-    aheadBy: 0,
-    local,
-    branch,
-    dirty,
-    reason,
-  });
+  if (!parseSemver(localVersion)) {
+    return {
+      state: 'unknown',
+      localVersion,
+      latestVersion,
+      reason: 'local version unreadable (package.json)',
+    };
+  }
+  if (!input.latestTag || !parseSemver(latestVersion)) {
+    return {
+      state: 'unknown',
+      localVersion,
+      latestVersion: '',
+      reason: 'no published version tags reachable (offline / rate-limited)',
+    };
+  }
 
-  if (!input.local) return unknown('no local HEAD (not a git checkout?)');
-  if (!input.branch) return unknown('no upstream branch (detached / not tracking)');
-  if (!input.compare) return unknown('compare unavailable (offline / unpushed local / rate-limited)');
-
-  const c = input.compare;
-  const stateMap: Record<string, FreshnessState> = {
-    identical: 'fresh',
-    behind: 'behind',
-    ahead: 'ahead',
-    diverged: 'diverged',
-  };
-  const state = stateMap[c.status] ?? 'unknown';
-
-  return {
-    state,
-    behindBy: c.behind_by ?? 0,
-    aheadBy: c.ahead_by ?? 0,
-    local,
-    branch,
-    dirty,
-    reason: state === 'unknown' ? `unrecognized compare status: ${c.status}` : undefined,
-  };
+  const cmp = compareSemver(localVersion, latestVersion);
+  const state: FreshnessState = cmp === 0 ? 'fresh' : cmp < 0 ? 'behind' : 'ahead';
+  return { state, localVersion, latestVersion };
 }
 
 /**
- * Pure UX policy: given a verdict, decide whether to nag the developer and how.
- *
- * Policy choices (tune freely — this is the single knob that shapes the UX):
- *  - Only `behind` and `diverged` are worth surfacing; both mean "you're missing
- *    upstream work". `ahead` (local unpushed) and `unknown` stay quiet.
- *  - A dirty working tree suppresses the nag entirely — the dev is mid-edit and
- *    a "you're behind" banner would just be noise (and updating would conflict).
+ * Pure UX policy: nag only when a newer version is published. `ahead` is the
+ * normal dev state right after a local bump (tag not pushed yet) — stay quiet.
  */
 export function decideAction(v: FreshnessVerdict): FreshnessAction {
-  const silent: FreshnessAction = { notify: false, severity: 'info', message: '' };
-
-  if (v.dirty) return silent;
-
   if (v.state === 'behind') {
     return {
       notify: true,
       severity: 'warn',
-      message: `Extension is ${v.behindBy} commit${v.behindBy === 1 ? '' : 's'} behind ${v.branch}. Pull + rebuild to update.`,
+      message: `Playbox extension v${v.latestVersion} is available (installed v${v.localVersion}).`,
     };
   }
-  if (v.state === 'diverged') {
-    return {
-      notify: true,
-      severity: 'warn',
-      message: `Extension diverged from ${v.branch} (behind ${v.behindBy}, ahead ${v.aheadBy}). Reconcile before updating.`,
-    };
-  }
-  return silent;
+  return { notify: false, severity: 'info', message: '' };
 }
 
-import { execFile } from 'child_process';
-import { get as httpsGet } from 'https';
-
-/** Pure: human-readable one-line status for the Settings "Check for updates" button. */
+/** Pure: one-line status for the Settings "Check for updates" button. */
 export function formatCheckResult(v: FreshnessVerdict): string {
-  const plural = (n: number) => `${n} commit${n === 1 ? '' : 's'}`;
   switch (v.state) {
     case 'fresh':
-      return `Up to date with ${v.branch}.`;
+      return `Up to date (v${v.localVersion}).`;
     case 'behind':
-      return `${plural(v.behindBy)} behind ${v.branch}.`;
+      return `v${v.latestVersion} available — installed v${v.localVersion}.`;
     case 'ahead':
-      return `${plural(v.aheadBy)} ahead of ${v.branch} (unpushed).`;
-    case 'diverged':
-      return `Diverged from ${v.branch}: behind ${v.behindBy}, ahead ${v.aheadBy}.`;
+      return `Local v${v.localVersion} is newer than the latest published v${v.latestVersion}.`;
     default:
       return `Couldn't check update status${v.reason ? ` (${v.reason})` : ''}.`;
   }
 }
 
 export interface CheckDeps {
-  /** Absolute path to the git working tree (the extension repo root). */
-  repoRoot: string;
-  /** Run `git <args>` in repoRoot, resolve trimmed stdout, reject on failure. */
-  runGit: (args: string[]) => Promise<string>;
-  /** Fetch GitHub compare/{base}...{head}; resolve null on any failure. */
-  fetchCompare: (slug: string, base: string, head: string) => Promise<CompareResult | null>;
+  /** Read this checkout's version (package.json). May throw. */
+  getLocalVersion: () => string;
+  /** Fetch tag names from the public repo; resolve null on any failure. */
+  fetchTags: () => Promise<string[] | null>;
 }
 
-/** IO orchestrator: gather git facts + remote compare, then classify. */
+/** Orchestrator: local version + published tags → verdict. */
 export async function checkFreshness(deps: CheckDeps): Promise<FreshnessVerdict> {
-  const { runGit, fetchCompare } = deps;
-  const tryGit = (args: string[]) => runGit(args).then((s) => s.trim()).catch(() => null);
-
-  const local = await tryGit(['rev-parse', 'HEAD']);
-  const upstreamRef = await tryGit(['rev-parse', '--symbolic-full-name', '@{u}']);
-  const statusOut = (await tryGit(['status', '--porcelain'])) ?? '';
-  const remoteUrl = await tryGit(['remote', 'get-url', 'origin']);
-
-  const dirty = statusOut.length > 0;
-  const slug = remoteUrl ? parseSlug(remoteUrl) : null;
-  let branch = upstreamRef ? stripRemoteRef(upstreamRef) : null;
-  if (!branch && slug) {
-    // No upstream (detached HEAD after checking out an old commit, or a local
-    // branch created without --track). Still meaningful to compare against the
-    // origin default branch instead of bailing out as 'unknown'.
-    const originHead = await tryGit(['rev-parse', '--abbrev-ref', 'origin/HEAD']);
-    branch = originHead ? originHead.replace(/^origin\//, '') : 'master';
+  let localVersion = '';
+  try {
+    localVersion = deps.getLocalVersion() || '';
+  } catch {
+    /* classified as unknown below */
   }
-
-  let compare: CompareResult | null = null;
-  if (local && branch && slug) {
-    compare = await fetchCompare(slug, branch, local).catch(() => null);
-  }
-
-  return classify({ dirty, branch, local, compare });
+  const tags = await deps.fetchTags().catch(() => null);
+  return classify({ localVersion, latestTag: tags ? pickLatestTag(tags) : null });
 }
 
 // ── Real (non-injected) dependency implementations ──────────────────────────
-// Not unit-tested: these are the concrete git/https sides that `checkFreshness`
-// receives via DI. The tested logic lives in classify/decideAction/checkFreshness.
 
-/** `git <args>` in repoRoot via child_process, with a short timeout. */
-export function defaultRunGit(repoRoot: string): (args: string[]) => Promise<string> {
-  return (args) =>
-    new Promise((resolve, reject) => {
-      execFile('git', args, { cwd: repoRoot, timeout: 5000, windowsHide: true }, (err, stdout) => {
-        if (err) reject(err);
-        else resolve(stdout.toString());
-      });
-    });
-}
+import { get as httpsGet } from 'https';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+/** Public GitHub repo this extension is published from. */
+export const REPO_SLUG = 'playbox-org/plbx-cocos-assistant';
 
 /**
- * GitHub compare over HTTPS. Public repo → no auth. Branch names keep their
- * slashes (the compare route accepts them literally); resolves null on any
- * non-200, parse error, timeout, or network failure so the check degrades to
- * `unknown` rather than throwing.
+ * Tag names via the GitHub /tags API (public repo — no auth). Resolves null on
+ * any non-200, parse error, timeout, or network failure so the check degrades
+ * to `unknown` rather than throwing. 100 per page covers years of releases.
  */
-export function defaultFetchCompare(
-  slug: string,
-  base: string,
-  head: string,
-): Promise<CompareResult | null> {
+export function defaultFetchTags(slug: string = REPO_SLUG): Promise<string[] | null> {
   return new Promise((resolve) => {
-    const path = `/repos/${slug}/compare/${base}...${head}`;
     const req = httpsGet(
       {
         host: 'api.github.com',
-        path,
+        path: `/repos/${slug}/tags?per_page=100`,
         headers: {
           'User-Agent': 'plbx-cocos-extension',
           Accept: 'application/vnd.github+json',
@@ -255,7 +182,7 @@ export function defaultFetchCompare(
         res.on('end', () => {
           try {
             const j = JSON.parse(body);
-            resolve({ status: j.status, ahead_by: j.ahead_by, behind_by: j.behind_by });
+            resolve(Array.isArray(j) ? j.map((t: any) => String(t?.name ?? '')) : null);
           } catch {
             resolve(null);
           }
@@ -270,11 +197,11 @@ export function defaultFetchCompare(
   });
 }
 
-/** Convenience: run the freshness check against a real checkout at `repoRoot`. */
+/** Convenience: run the freshness check for the checkout at `repoRoot`. */
 export async function runFreshnessCheck(repoRoot: string): Promise<FreshnessVerdict> {
   return checkFreshness({
-    repoRoot,
-    runGit: defaultRunGit(repoRoot),
-    fetchCompare: defaultFetchCompare,
+    getLocalVersion: () =>
+      JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')).version,
+    fetchTags: () => defaultFetchTags(),
   });
 }

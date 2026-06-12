@@ -20,7 +20,7 @@
 | **TikTok/Pangle** | `playableSDK.openAppStore()` | No | 5 MB | ZIP | gameReady, gameStart | [Docs](https://ads.tiktok.com/help/article/playable-ads) |
 | **Vungle** | `parent.postMessage('download','*')` | No (Adaptive) / MRAID 2.0 (Exchange) | 5 MB | ZIP | — | [Creative Verifier](https://vungle.com/creative-verifier/) |
 | **AdColony** | `mraid.open(url)` | MRAID 2.0 | 2 MB | HTML | — | None |
-| **Chartboost** | `mraid.open(url)` | MRAID 2.0 | ~5 MB (rec. 3 MB) | HTML | Resize/Open/Close | MRAID Upload tool |
+| **Chartboost** | `mraid.open(url)` | MRAID 2.0 | **3 MB (hard)** | HTML (single bundled) | ready/stateChange/viewableChange; **no `mraid.close()`** | MRAID Upload tool — see [chartboost-playable.md](../networks/chartboost-playable.md) |
 | **Tapjoy** | Tapjoy Click API | No | 2 MB | HTML | — | [playable.tapjoy.com](https://playable.tapjoy.com/) |
 | **Liftoff** | `mraid.open(url)` | MRAID 2.0 | 5 MB | HTML | — | TODO |
 | **Appreciate** | `mraid.open(url)` | MRAID | 5 MB | HTML | — | TODO |

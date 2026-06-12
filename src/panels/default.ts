@@ -111,6 +111,7 @@ module.exports = Editor.Panel.define({
     pkgShowSplash:    '#pkg-show-splash',
     pkgSplashCost:    '#pkg-splash-cost',
     pkgEncoding:      '#pkg-encoding',
+    pkgEncWarn:       '#pkg-enc-warn',
     pkgTemplatePreset:'#pkg-template-preset',
     pkgOutputTemplate:'#pkg-output-template',
     pkgTemplatePreview:'#pkg-template-preview',
@@ -1492,11 +1493,16 @@ module.exports = Editor.Panel.define({
         if (showSplashCb) showSplashCb.checked = settings?.showSplash !== false;
         const encArr: string[] = Array.isArray(settings?.assetEncodings) && settings.assetEncodings.length
           ? settings.assetEncodings
-          : ['base122'];
+          : ['base64'];
         const encSel = this.$.pkgEncoding as HTMLSelectElement | null;
         if (encSel) {
           const both = encArr.includes('base64') && encArr.includes('base122');
           encSel.value = both ? 'both' : encArr.includes('base122') ? 'base122' : 'base64';
+          const encWarn = this.$.pkgEncWarn as HTMLElement | null;
+          if (encWarn) {
+            encWarn.style.display = encSel.value === 'base64' ? 'none' : 'inline';
+            encWarn.title = translate(this._lang || 'en', 'settings.encWarn');
+          }
         }
 
         const ori = settings?.orientation ?? 'auto';
@@ -1568,14 +1574,19 @@ module.exports = Editor.Panel.define({
           .catch((e: any) => { console.warn('[plbx]', e); });
       });
 
-      // Asset-encoding dropdown (base122 default / base64 / both). Maps the single
-      // choice to the assetEncodings array; "both" emits index.html + index.b122.html
-      // for A/B size comparison. Persisted to project settings; packaging reads it
-      // via toPackageConfig.
+      // Asset-encoding dropdown (base64 default / base122 / both). Maps the single
+      // choice to the assetEncodings array; "both" emits index.html (base122) +
+      // index.b64.html for A/B size comparison. Persisted to project settings;
+      // packaging reads it via toPackageConfig. base122 surfaces a hover warning.
       (this.$.pkgEncoding as HTMLSelectElement)?.addEventListener('change', () => {
-        const v = (this.$.pkgEncoding as HTMLSelectElement)?.value || 'base122';
+        const v = (this.$.pkgEncoding as HTMLSelectElement)?.value || 'base64';
         const enc: ('base64' | 'base122')[] =
-          v === 'both' ? ['base64', 'base122'] : v === 'base64' ? ['base64'] : ['base122'];
+          v === 'both' ? ['base64', 'base122'] : v === 'base122' ? ['base122'] : ['base64'];
+        const warn = this.$.pkgEncWarn as HTMLElement | null;
+        if (warn) {
+          warn.style.display = v === 'base64' ? 'none' : 'inline';
+          warn.title = translate(this._lang || 'en', 'settings.encWarn');
+        }
         Editor.Message.request('plbx-cocos-extension', 'save-settings', { assetEncodings: enc })
           .catch((e: any) => { console.warn('[plbx]', e); });
       });

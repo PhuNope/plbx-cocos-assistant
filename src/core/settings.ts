@@ -22,8 +22,9 @@ export interface ProjectSettings {
   /** Show PLBX loading splash until the first rendered Cocos frame. */
   showSplash: boolean;
   /** Asset-container encodings to emit (self-contained loader only). Default
-   *  ['base122'] (~14% smaller on disk). ['base64','base122'] emits both —
-   *  index.html (base122) + sibling index.b64.html. Invariant: at least one entry. */
+   *  ['base64'] (most stable, fastest boot, larger file). base122 is ~14% smaller
+   *  but less robust. ['base64','base122'] emits both — index.html (base122) +
+   *  sibling index.b64.html. Invariant: at least one entry. */
   assetEncodings: ('base64' | 'base122')[];
   /** Moloco Ad Account ID for CDN asset uploads (per-project; API key is global). */
   molocoAdAccountId: string;
@@ -48,7 +49,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   loaderMode: 'self-contained',
   legacyLoaderNetworks: [],
   showSplash: true,
-  assetEncodings: ['base122'],
+  assetEncodings: ['base64'],
   molocoAdAccountId: '',
   molocoAssetProvider: '',
   molocoAssetTitle: '',
@@ -67,7 +68,7 @@ export function toPackageConfig(s: ProjectSettings): PackageConfig {
     loaderMode: s.loaderMode,
     legacyLoaderNetworks: s.legacyLoaderNetworks,
     showSplash: s.showSplash !== false,
-    assetEncodings: s.assetEncodings && s.assetEncodings.length ? s.assetEncodings : ['base122'],
+    assetEncodings: s.assetEncodings && s.assetEncodings.length ? s.assetEncodings : ['base64'],
   };
 }
 

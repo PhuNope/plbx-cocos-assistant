@@ -112,4 +112,15 @@ describe('emitBase122Decoder (browser JS)', () => {
     const src = new Uint8Array([0, 10, 13, 34, 38, 60, 92, 0xff, 0x80, 34, 60, 0]);
     expect(Array.from(decode(encodeBase122(src)))).toEqual(Array.from(src));
   });
+
+  it('round-trips when given the output length (preallocation fast path)', () => {
+    const decode = makeDecoder();
+    for (const n of [0, 1, 7, 8, 255, 1000, 5000]) {
+      const src = lcgBytes(n, 0xfee + n);
+      const got = decode(encodeBase122(src), n);
+      expect(got).toBeInstanceOf(Uint8Array);
+      expect(got.length).toBe(n);
+      expect(Array.from(got)).toEqual(Array.from(src));
+    }
+  });
 });

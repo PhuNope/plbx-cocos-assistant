@@ -951,10 +951,11 @@ export function generateFullHtml(params: {
   // ever pass the base64 string (one source of truth, no caller/encoding skew).
   const encoding: 'base64' | 'base122' =
     mode === 'self-contained' && params.encoding === 'base122' ? 'base122' : 'base64';
+  // Raw ZIP byte length — passed to the base122 decoder so it preallocates the
+  // exact Uint8Array (no growing array / final copy → ~5-10x faster unpack).
+  const zipRawBytes = encoding === 'base122' ? Buffer.from(zipBase64, 'base64') : null;
   const zipEncoded =
-    encoding === 'base122'
-      ? encodeBase122(new Uint8Array(Buffer.from(zipBase64, 'base64')))
-      : zipBase64;
+    encoding === 'base122' ? encodeBase122(new Uint8Array(zipRawBytes!)) : zipBase64;
   const jszipRuntime = getJSZipRuntime();
   const runtimeLoader = generateRuntimeLoader({ ...loaderOptions, mode });
 
@@ -1050,9 +1051,12 @@ export function generateFullHtml(params: {
     // The self-contained loader builds __plbx_res from the ZIP itself, so it
     // only needs the encoded ZIP. No pre-populated __res / __plbx_scripts.
     if (encoding === 'base122') {
-      // Define the decoder + set the marker BEFORE unpack runs. base122 output is
-      // safe verbatim in a double-quoted JS string (no ", \, <, &, NUL, CR, LF).
-      injection += '<script>' + emitBase122Decoder() + 'window.__plbx_enc="b122";</script>\n';
+      // Define the decoder + set the marker/length BEFORE unpack runs. base122
+      // output is safe verbatim in a double-quoted JS string (no ", \, <, &, NUL,
+      // CR, LF). __plbx_zip_len lets the decoder preallocate the exact buffer.
+      injection +=
+        '<script>' + emitBase122Decoder() +
+        'window.__plbx_enc="b122";window.__plbx_zip_len=' + (zipRawBytes!.length) + ';</script>\n';
     }
     injection += '<script>window.__plbx_zip = "' + zipEncoded + '";</script>\n';
   } else {

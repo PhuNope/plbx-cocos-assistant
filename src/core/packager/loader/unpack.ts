@@ -26,7 +26,7 @@ export function emitUnpack(options: RuntimeLoaderOptions): string {
   // base64 option). Else the legacy/default base64 string path.
   var _zipInput, _zipOpts;
   if (window.__plbx_enc === 'b122' && typeof window.__plbx_b122decode === 'function') {
-    _zipInput = window.__plbx_b122decode(window.__plbx_zip);
+    _zipInput = window.__plbx_b122decode(window.__plbx_zip, window.__plbx_zip_len);
     _zipOpts = {};
   } else {
     _zipInput = window.__plbx_zip;

@@ -245,12 +245,15 @@
           </div>
           <div class="form-group">
             <span class="form-label" data-i18n="settings.encodings">Asset encoding</span>
-            <select id="pkg-encoding" class="form-select" style="max-width:260px;">
-              <option value="base122" data-i18n="settings.encBase122">base122 (~14% smaller)</option>
-              <option value="base64" data-i18n="settings.encBase64">base64</option>
-              <option value="both" data-i18n="settings.encBoth">both (A/B compare)</option>
-            </select>
-            <div class="pkg-hint" data-i18n="settings.encHint">base122 ~14% smaller on disk. "both" emits index.html (base122) + index.b64.html.</div>
+            <span style="display:inline-flex;align-items:center;gap:6px;">
+              <select id="pkg-encoding" class="form-select" style="max-width:240px;">
+                <option value="base64" data-i18n="settings.encBase64">base64 (default)</option>
+                <option value="base122" data-i18n="settings.encBase122">base122 (~14% smaller)</option>
+                <option value="both" data-i18n="settings.encBoth">both (A/B compare)</option>
+              </select>
+              <span id="pkg-enc-warn" class="pkg-enc-warn" style="display:none;cursor:help;color:#e0a000;" title="">⚠</span>
+            </span>
+            <div class="pkg-hint" data-i18n="settings.encHint">base64: most stable, faster boot, larger. base122: ~14% smaller, less robust.</div>
           </div>
         </div>
       </div>

@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { chromium, Browser, Page } from 'playwright';
 import { packageForNetworks } from '../../src/core/packager/packager';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 // Known external resources that are expected to fail (provided by ad SDKs at runtime)
@@ -271,5 +271,29 @@ for (const project of PROJECTS) {
         expect(critical).toEqual([]);
       }, 120000);
     }
+
+    // base122 is opt-in (base64 is the default). Keep one explicit boot check so
+    // the base122 decode→unpack path stays covered after the default flip.
+    it('base122-encoded HTML should load without critical errors (applovin)', async () => {
+      const result = await packageForNetworks({
+        buildDir,
+        outputDir,
+        networks: ['applovin'],
+        config: { ...project.config, assetEncodings: ['base122'] },
+      });
+      const htmlResult = result.results.find(r => r.format === 'html');
+      expect(htmlResult).toBeDefined();
+      const html = readFileSync(htmlResult!.outputPath, 'utf8');
+      expect(html).toContain('__plbx_enc="b122"');
+
+      const browserResult = await verifyHtmlInBrowser(browser, htmlResult!.outputPath, 15000);
+      const critical = getCriticalErrors(browserResult);
+      if (critical.length > 0) {
+        console.log(`\n  ${project.name}/applovin[b122] critical errors:`);
+        critical.forEach(e => console.log('    -', e));
+      }
+      console.log(`  ${project.name}/applovin[b122]: ${browserResult.errors.length} console, ${browserResult.networkErrors.length} network, ${browserResult.uncaughtExceptions.length} exceptions, ${critical.length} critical`);
+      expect(critical).toEqual([]);
+    }, 120000);
   });
 }

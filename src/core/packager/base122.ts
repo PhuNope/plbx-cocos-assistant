@@ -116,24 +116,39 @@ export function decodeBase122(str: string): Uint8Array {
  * Uses charCodeAt, not for..of/codePointAt: every base122 char is a single BMP
  * code unit (<= 0x3FF), so there are no surrogate pairs to worry about, and the
  * index loop is far faster over a multi-MB payload string.
+ *
+ * Performance: takes an optional outLen (the decoded byte count, emitted as
+ * window.__plbx_zip_len) to preallocate the exact Uint8Array and write by index —
+ * no growing array, no final copy, no per-byte function call. ~5-10x faster on a
+ * multi-MB payload than push()+new Uint8Array(). Falls back to an over-allocated
+ * buffer + subarray when outLen is absent.
  */
 export function emitBase122Decoder(): string {
   return `
-window.__plbx_b122decode = function (str) {
-  var ILL = [0, 10, 13, 34, 38, 60, 92], SH = 7;
-  var out = [], cur = 0, nb = 0;
-  function p7(b) {
-    b <<= 1;
-    cur |= (b >>> nb) & 255;
-    nb += 7;
-    if (nb >= 8) { out.push(cur & 255); nb -= 8; cur = (b << (7 - nb)) & 255; }
+window.__plbx_b122decode = function (str, outLen) {
+  var ILL = [0, 10, 13, 34, 38, 60, 92];
+  var n = str.length;
+  // Fallback bound when outLen is absent: a 2-byte char yields up to 2 7-bit
+  // groups, so output bytes <= 1.75*n; n*2+1 is a safe over-allocation, trimmed
+  // by subarray at the end.
+  var out = new Uint8Array(outLen != null ? outLen : n * 2 + 1);
+  var oi = 0, cur = 0, nb = 0, c, ix, b;
+  for (var i = 0; i < n; i++) {
+    c = str.charCodeAt(i);
+    if (c > 127) {
+      ix = (c >> 8) & 7;
+      if (ix !== 7) {
+        b = ILL[ix] << 1; cur |= (b >>> nb) & 255; nb += 7;
+        if (nb >= 8) { out[oi++] = cur & 255; nb -= 8; cur = (b << (7 - nb)) & 255; }
+      }
+      b = (c & 127) << 1; cur |= (b >>> nb) & 255; nb += 7;
+      if (nb >= 8) { out[oi++] = cur & 255; nb -= 8; cur = (b << (7 - nb)) & 255; }
+    } else {
+      b = c << 1; cur |= (b >>> nb) & 255; nb += 7;
+      if (nb >= 8) { out[oi++] = cur & 255; nb -= 8; cur = (b << (7 - nb)) & 255; }
+    }
   }
-  for (var i = 0; i < str.length; i++) {
-    var c = str.charCodeAt(i);
-    if (c > 127) { var ix = (c >> 8) & 7; if (ix !== SH) p7(ILL[ix]); p7(c & 127); }
-    else p7(c);
-  }
-  return new Uint8Array(out);
+  return outLen != null ? out : out.subarray(0, oi);
 };
 `;
 }

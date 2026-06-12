@@ -529,19 +529,19 @@ function assertHasRequiredStrings(html: string, required: string[], networkName:
  * Resolve which asset-container encodings to emit for the inlined-HTML path.
  * base122 requires the self-contained loader (its decoder is only wired into
  * that unpack), so it's dropped for systemjs-pinned outputs. Defaults to
- * ['base122'] when unset; always returns a non-empty, de-duplicated list.
+ * ['base64'] when unset; always returns a non-empty, de-duplicated list.
  */
 function resolveInlinedEncodings(
   config: { assetEncodings?: ('base64' | 'base122')[] },
   loaderMode: 'self-contained' | 'systemjs',
 ): ('base64' | 'base122')[] {
   const sel: ('base64' | 'base122')[] =
-    config.assetEncodings && config.assetEncodings.length ? config.assetEncodings : ['base122'];
+    config.assetEncodings && config.assetEncodings.length ? config.assetEncodings : ['base64'];
   const deduped = sel.filter((e, i) => sel.indexOf(e) === i);
   // base122's decoder is only wired into the self-contained unpack → systemjs
   // outputs fall back to base64.
   if (loaderMode !== 'self-contained') return ['base64'];
-  return deduped.length ? deduped : ['base122'];
+  return deduped.length ? deduped : ['base64'];
 }
 
 /**

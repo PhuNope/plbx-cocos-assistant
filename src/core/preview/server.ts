@@ -4,12 +4,18 @@ import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import JSZip from 'jszip';
 import { generatePreviewUtil } from './sdk-mocks';
 import { getNetwork } from '../../shared/networks';
+import { resolveTemplate } from '../packager/template-resolver';
 import { validateLauncher, LauncherCheck } from '../packager/launcher-builder';
 import { AXON_EVENTS } from '../packager/axon-events';
 import { detectRegionalParams } from '../packager/store-url-extractor';
 
 let _server: http.Server | null = null;
 let _port = 0;
+// Output-naming context from the active preview session, so findBuildFile can
+// resolve the SAME path the packager wrote (custom templates move the file out
+// of the default {networkId}/ folder). Set by startPreviewServer.
+let _previewTemplate: string | undefined;
+let _previewTemplateVars: Record<string, string> | undefined;
 
 interface BuildFile {
   path: string;
@@ -18,7 +24,52 @@ interface BuildFile {
   payloadPath?: string;
 }
 
-function findBuildFile(outputDir: string, networkId: string): BuildFile | null {
+/**
+ * Resolve the exact build file the packager produced for a network using the
+ * output-naming template, trying the network's format ext plus html/zip. Returns
+ * the first existing path, or null. This is what makes the validator work with
+ * non-default Output Naming (e.g. `{networkId}.{ext}`, `{projectName}/...`).
+ */
+function resolveTemplatedBuildPath(
+  outputDir: string,
+  networkId: string,
+  template: string,
+  templateVariables?: Record<string, string>,
+): BuildFile | null {
+  const net = getNetwork(networkId);
+  const exts = Array.from(new Set([net?.format, 'html', 'zip'].filter(Boolean) as string[]));
+  for (const ext of exts) {
+    try {
+      const rel = resolveTemplate(template, {
+        network: networkId,
+        networkId,
+        format: ext,
+        ext,
+        ...(templateVariables || {}),
+      });
+      const full = join(outputDir, rel);
+      if (existsSync(full)) return { path: full, isZip: ext === 'zip' || full.toLowerCase().endsWith('.zip') };
+    } catch {
+      // Bad template/var for this ext — try the next.
+    }
+  }
+  return null;
+}
+
+export function findBuildFile(
+  outputDir: string,
+  networkId: string,
+  opts?: { template?: string; templateVariables?: Record<string, string> },
+): BuildFile | null {
+  // 1. Honor the output-naming template (explicit opts, else the active session).
+  const template = opts?.template ?? _previewTemplate;
+  const templateVars = opts?.templateVariables ?? _previewTemplateVars;
+  if (template) {
+    const templated = resolveTemplatedBuildPath(outputDir, networkId, template, templateVars);
+    if (templated) return templated;
+  }
+
+  // 2. Fallback heuristic: the default {networkId}/ layout.
   const dir = join(outputDir, networkId);
   if (!existsSync(dir)) return null;
 
@@ -615,6 +666,11 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: -apple-system, BlinkMac
 export async function startPreviewServer(options: {
   outputDir: string;
   networks: string[];
+  /** Output-naming template the packager used (default '{networkId}/index.{ext}').
+   *  Lets the validator find files written under a custom naming scheme. */
+  outputTemplate?: string;
+  /** User-defined template variables (e.g. projectName) referenced by the template. */
+  templateVariables?: Record<string, string>;
 }): Promise<{ port: number; url: string }> {
   // Stop existing server if running
   if (_server) {
@@ -622,6 +678,8 @@ export async function startPreviewServer(options: {
   }
 
   const { outputDir, networks } = options;
+  _previewTemplate = options.outputTemplate;
+  _previewTemplateVars = options.templateVariables;
 
   return new Promise((resolve, reject) => {
     const server = http.createServer(async (req, res) => {

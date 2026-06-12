@@ -632,7 +632,15 @@ export const methods: Record<string, (...args: any[]) => any> = {
     const { resolve } = require('path');
     const projectRoot = Editor.Project.path || '';
     const absOutputDir = resolve(projectRoot, outputDir);
-    const result = await startPreviewServer({ outputDir: absOutputDir, networks: networkIds });
+    // Pass the saved output-naming template so the validator resolves files
+    // written under a non-default scheme (otherwise it only finds {networkId}/index.html).
+    const settings = await getProjectSettings();
+    const result = await startPreviewServer({
+      outputDir: absOutputDir,
+      networks: networkIds,
+      outputTemplate: settings.outputTemplate,
+      templateVariables: settings.templateVariables,
+    });
     // Open in default browser
     const { shell } = require('electron');
     shell.openExternal(result.url);

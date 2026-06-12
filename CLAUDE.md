@@ -38,6 +38,10 @@ preview validator, and deploy to the Playbox platform (plbx.ai).
 
 - Versioning: bump `package.json` version before every push; tag `vX.Y.Z`
   and push the tag — the pushed tag IS the publish step.
+- Release notes: every version bump MUST ship a GitHub Release with notes —
+  `gh release create vX.Y.Z --title "..." --notes-file <file> --latest`.
+  Notes cover highlights (features/fixes, user-facing impact) + the commit list
+  since the previous release. Do this as part of the bump, never skip it.
 - Update check (`src/core/freshness/freshness-check.ts`): compares local
   `package.json` version against the max semver tag from the public GitHub
   `/tags` API. Pure version comparison — intentionally no git involvement

@@ -627,6 +627,12 @@
       setCheck('store_url_regional', 'pass', 'No regional params');
     }
 
+    // iOS-risky audio (ogg/opus/webm) — advisory warn. The check def exists only
+    // when the packager flagged files, so this is always a warn when shown.
+    if (net && net.riskyAudio && net.riskyAudio.length) {
+      setCheck('risky_audio', 'warn', net.riskyAudio.join(', ') + ' — re-encode to mp3/m4a');
+    }
+
     // Static loader-health fingerprint — pass/fail is known at fetch time.
     loaderHealth.forEach(function(lc) {
       setCheck('lh_' + lc.id, lc.pass ? 'pass' : 'fail', lc.detail);

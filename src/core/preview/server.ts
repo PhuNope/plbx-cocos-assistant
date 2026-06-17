@@ -4,6 +4,7 @@ import { existsSync, readFileSync, statSync, readdirSync } from 'fs';
 import JSZip from 'jszip';
 import { generatePreviewUtil } from './sdk-mocks';
 import { scanLoaderHealth, LoaderCheck } from './loader-health';
+import { parseRiskyAudioMarker } from '../packager/audio-format-check';
 import { getNetwork } from '../../shared/networks';
 import { resolveTemplate } from '../packager/template-resolver';
 import { validateLauncher, LauncherCheck } from '../packager/launcher-builder';
@@ -160,6 +161,23 @@ const STORE_URL_RE =
  * shows the check as a pass when clean, instead of a silent N/A). Reads the built
  * HTML (zip-aware); mirrors the package-time regional gate (packager.ts).
  */
+/**
+ * Static validator: iOS-risky audio (ogg/opus/webm) in the build. Reads the
+ * packager's plaintext `<head>` marker (zip-aware) — the real asset extensions
+ * are buried in the encoded container, so the marker is the reliable signal.
+ * Returns the offending file list ([] when none / unreadable).
+ */
+async function buildRiskyAudio(outputDir: string, networkId: string): Promise<string[]> {
+  try {
+    const file = findBuildFile(outputDir, networkId);
+    if (!file) return [];
+    const html = file.isZip ? await extractHtmlFromZip(file.path) : readFileSync(file.path, 'utf-8');
+    return parseRiskyAudioMarker(html);
+  } catch {
+    return [];
+  }
+}
+
 async function buildStoreUrlRegional(
   outputDir: string,
   networkId: string,
@@ -753,6 +771,16 @@ export async function startPreviewServer(options: {
                   hint: 'Remove regional/localization parameters (gl/hl, Apple /us/ country path, …) from the store URL — the creative must serve globally. Set a clean URL via set_google_play_url / set_app_store_url.',
                 });
               }
+              // iOS-risky audio (ogg/opus/webm) — advisory warn. Check def exists
+              // only when the packager flagged risky files (marker present).
+              const riskyAudio = await buildRiskyAudio(outputDir, id);
+              if (riskyAudio.length) {
+                checks.push({
+                  id: 'risky_audio',
+                  label: 'No iOS-risky audio (ogg/opus/webm)',
+                  hint: 'Safari/iOS WebAudio decodeAudioData can\'t decode ogg/opus/webm on older / in-app WebViews — the playable may not open. Re-encode these to mp3/m4a in Cocos import settings.',
+                });
+              }
               return {
                 id,
                 name: config?.name || id,
@@ -764,6 +792,7 @@ export async function startPreviewServer(options: {
                 hasGooglePlayUrl: store.google,
                 hasAppStoreUrl: store.apple,
                 regional: regional.warnings,
+                riskyAudio,
                 checks,
                 launcherChecks,
                 loaderHealth,

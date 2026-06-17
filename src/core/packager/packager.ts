@@ -12,6 +12,7 @@ import { generateFullHtml, generatePayloadJs } from './runtime-loader';
 import { buildLauncher, fillLauncherPayloadUrl, validateLauncher, effectiveLauncherBytes } from './launcher-builder';
 import { resolveTemplate } from './template-resolver';
 import { extractStoreUrls, detectRegionalParams } from './store-url-extractor';
+import { detectRiskyAudio, riskyAudioMarker } from './audio-format-check';
 import { extractAxonUsage, validateAxonEvents } from './axon-events';
 import { buildVersionBanner } from './version-banner';
 import CleanCSS from 'clean-css';
@@ -80,6 +81,12 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
   // source so the applovin branch below can warn on spec violations.
   const axonUsage = extractAxonUsage(options.buildDir);
 
+  // Risky audio (ogg/opus/webm) — Safari/iOS WebAudio decodeAudioData can't
+  // decode these on older / in-app WebViews, so the playable can hang on boot.
+  // Scanned once from the build source (the encoding-agnostic source of truth);
+  // surfaced as a warning + a plaintext <head> marker the preview validator reads.
+  const riskyAudio = detectRiskyAudio(options.buildDir);
+
   for (const networkId of options.networks) {
     options.onProgress?.(networkId, 'starting');
 
@@ -100,6 +107,11 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
       for (const url of headStoreUrls) {
         builder.injectHeadComment(url);
       }
+      // Plaintext marker so the preview validator can warn on iOS-risky audio
+      // (the real extensions are buried in the encoded asset container).
+      if (riskyAudio.length && network.format !== 'launcher-payload') {
+        builder.injectHeadComment(riskyAudioMarker(riskyAudio));
+      }
 
       // Non-fatal warning: a network whose validator requires a Google Play Store
       // URL (e.g. Unity) but none was found in the build. We don't abort — the
@@ -108,6 +120,17 @@ export async function packageForNetworks(options: PackagerOptions): Promise<Pack
 
       // Regional store-URL params — applies to every network shipping the URL.
       for (const w of regionalWarnings) {
+        warnings.push(w);
+        console.warn(`[plbx] ${network.name}: ${w}`);
+        options.onProgress?.(networkId, 'processing', w);
+      }
+
+      // iOS-risky audio (ogg/opus/webm) — advisory, every network.
+      if (riskyAudio.length) {
+        const w =
+          `${riskyAudio.length} risky audio file(s) may not play on iOS WebView ` +
+          `(decodeAudioData can't decode ogg/opus/webm) — re-encode to mp3/m4a: ` +
+          riskyAudio.join(', ');
         warnings.push(w);
         console.warn(`[plbx] ${network.name}: ${w}`);
         options.onProgress?.(networkId, 'processing', w);

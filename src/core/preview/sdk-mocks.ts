@@ -4,8 +4,9 @@ export interface PreviewUtilParams {
   maxSize: number;
   /** Adversarial mraid timing for the boot harness. Default 'happy' (today's
    *  behavior: viewable true right after ready). Hostile modes stress the
-   *  defer-boot gate so a fragile loader greys out instead of silently passing.
-   *  Ignored for molocoV2 (which has its own manual-viewable semantics). */
+   *  defer-boot gate so a fragile loader greys out instead of silently passing:
+   *  'neverViewable' (no pulse at all) and 'lostPulse' (a stray viewableChange
+   *  pulse the gate must survive). Ignored for molocoV2 (own manual-viewable). */
   mraidMode?: 'happy' | 'neverViewable' | 'lostPulse' | string;
 }
 

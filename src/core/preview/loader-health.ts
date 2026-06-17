@@ -40,19 +40,13 @@ function blockAfter(html: string, marker: string): string | null {
 
 /** Parse the packager version (vX.Y.Z) from the console banner. */
 function parseLoaderVersion(html: string): string | null {
-  const m = html.match(/v(\d+)\.(\d+)\.(\d+)/);
-  return m ? `${m[1]}.${m[2]}.${m[3]}` : null;
+  const m = html.match(/v(\d+\.\d+\.\d+)/);
+  return m ? m[1] : null;
 }
 
-/** a >= b for dotted numeric versions. */
+/** a >= b for dotted numeric versions (segment-wise numeric compare). */
 function versionGte(a: string, b: string): boolean {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    const d = (pa[i] || 0) - (pb[i] || 0);
-    if (d !== 0) return d > 0;
-  }
-  return true;
+  return a.localeCompare(b, undefined, { numeric: true }) >= 0;
 }
 
 export function scanLoaderHealth(html: string, opts: { mraid: boolean }): LoaderCheck[] {

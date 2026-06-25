@@ -47,7 +47,15 @@ function buildPlbxBridge(downloadBody: string, extras?: string): string {
   is_hide_download: function() { return false; },
   is_muted: function() { return false; },
   report: function() {},
-  tap: function() {}
+  tap: function() {},
+  external_commands: [],
+  expose: function(name, fn, label) {
+    if (typeof name !== 'string' || typeof fn !== 'function') return;
+    this[name] = fn;
+    for (var i = 0; i < this.external_commands.length; i++) { if (this.external_commands[i].name === name) return; }
+    this.external_commands.push({ name: name, label: label || name });
+    try { parent.postMessage({ type: 'plbx:command', name: name, label: label || name }, '*'); } catch (e) {}
+  }
 };
 window.super_html = window.super_html || window.plbx_html;${extras ? '\n' + extras : ''}`;
 }

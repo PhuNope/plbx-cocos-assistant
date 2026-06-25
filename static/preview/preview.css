@@ -709,6 +709,18 @@ h3 {
   gap: 0.3rem;
   margin-bottom: 0.3rem;
 }
+/* No registered commands (the default for most networks) → no dead gap. */
+#plbx-cmd-row:empty { display: none; margin: 0; }
+/* Game-command toolbar: its own dock, opposite corner from the MolocoV2 dock
+   (top-left) so the two never overlap when a build has both. */
+.plbx-cmd-dock {
+  left: auto;
+  /* Sit just LEFT of the 320px validation sidebar (right edge of the screen)
+     instead of overlapping it. Keep in sync with .sidebar width. */
+  right: calc(320px + 1.5rem);
+  border-color: rgba(99, 179, 237, 0.45);
+}
+.plbx-cmd-dock .mv2-dock-title { color: #63b3ed; }
 .mv2-btn {
   background: rgba(245, 166, 35, 0.15);
   color: #f5a623;

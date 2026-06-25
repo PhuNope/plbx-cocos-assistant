@@ -133,6 +133,14 @@ window.plbx_html.tap = function() {
   if (taps === te) fireOnce('engagement');
   if (taps === tr) fireOnce('redirection');
 };
+window.plbx_html.external_commands = window.plbx_html.external_commands || [];
+window.plbx_html.expose = function(name, fn, label) {
+  if (typeof name !== 'string' || typeof fn !== 'function') return;
+  this[name] = fn;
+  for (var i = 0; i < this.external_commands.length; i++) { if (this.external_commands[i].name === name) return; }
+  this.external_commands.push({ name: name, label: label || name });
+  try { parent.postMessage({ type: 'plbx:command', name: name, label: label || name }, '*'); } catch (e) {}
+};
 window.super_html = window.super_html || window.plbx_html;
 // super-html channel marker: games (e.g. train-miner) detect the build via
 // window.super_html_channel and route CTA through super_html.download() (→ our

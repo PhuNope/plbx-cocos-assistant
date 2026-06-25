@@ -34,7 +34,15 @@ function mintegralBridge(): string {
     if (typeof window.gameClose === 'function') { try { window.gameClose(); } catch(e) {} }
   },
   is_audio: function() { return true; },
-  is_hide_download: function() { return false; }
+  is_hide_download: function() { return false; },
+  external_commands: [],
+  expose: function(name, fn, label) {
+    if (typeof name !== 'string' || typeof fn !== 'function') return;
+    this[name] = fn;
+    for (var i = 0; i < this.external_commands.length; i++) { if (this.external_commands[i].name === name) return; }
+    this.external_commands.push({ name: name, label: label || name });
+    try { parent.postMessage({ type: 'plbx:command', name: name, label: label || name }, '*'); } catch (e) {}
+  }
 };
 window.super_html = window.super_html || window.plbx_html;`;
 }

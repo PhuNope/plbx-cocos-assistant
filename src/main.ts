@@ -930,6 +930,7 @@ const PLBX_ADAPTER_TEMPLATE = `/**
  *   plbx.download();       // redirect to store
  *   plbx.game_end();       // notify ad network that gameplay ended
  *   plbx.is_audio();       // check if audio is allowed
+ *   plbx.expose(name, fn); // register a command external callers can trigger
  *
  * --- Wire these calls into your Cocos game lifecycle ---
  *
@@ -941,6 +942,21 @@ const PLBX_ADAPTER_TEMPLATE = `/**
  *
  * Without these calls, network validators (Moloco V2, Mintegral PlayTurbo,
  * etc.) will not detect lifecycle beacons and may flag the creative.
+ *
+ * --- Optional: external commands (preview "Game commands" toolbar) ---
+ *
+ * Register handlers external callers (ad container, test harness, or the
+ * Playbox panel preview) can invoke. The preview renders one button per
+ * registered command, so you can drive these states without playing through:
+ *
+ *   onLoad() {
+ *       plbx.expose('show_endcard', () => this.showEndcard(), 'Show endcard');
+ *       plbx.expose('restart',      () => this.restart(),      'Restart');
+ *   }
+ *
+ * Register AFTER the scene can handle the action. External callers then trigger
+ * it via window.plbx_html.show_endcard(). The optional 3rd arg is the preview
+ * button label (defaults to the command name).
  */
 export class plbx_html_playable {
 
@@ -1086,6 +1102,25 @@ export class plbx_html_playable {
         if (window.plbx_html) { plbx_html.appstore_url = url; }
         //@ts-ignore
         if (window.super_html) { super_html.appstore_url = url; }
+    }
+
+    /**
+     * Register a named command that external callers can invoke — the ad
+     * container, a test harness, or the Playbox panel preview (which renders a
+     * trigger button per command in its "Game commands" toolbar).
+     *
+     *   plbx.expose('show_endcard', () => this.showEndcard(), 'Show endcard');
+     *
+     * The game implements 'fn'; external callers trigger it via
+     * window.plbx_html.<name>(). 'label' is the preview button text (defaults to
+     * name). Register after your scene is ready to handle the action.
+     */
+    expose(name: string, fn: () => void, label?: string) {
+        //@ts-ignore
+        if (window.plbx_html && plbx_html.expose) { plbx_html.expose(name, fn, label); }
+        //@ts-ignore
+        else if (window.super_html && super_html.expose) { super_html.expose(name, fn, label); }
+        else { console.log("[plbx] expose unavailable (update the Playbox extension): " + name); }
     }
 }
 export default new plbx_html_playable();

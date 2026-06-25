@@ -84,6 +84,9 @@
   var macroFires = {};           // { macroKey: { count, lastTs, lastUrl } }
   var molocoV2MacroDefs = [];    // [{ id: 'macro_X', label, key }] extracted from server checks
   var viewableListenerSeen = false;
+  // plbx_html external commands — names registered by the current iframe via
+  // plbx_html.expose(); rendered as manual-trigger buttons. Reset per iframe.
+  var registeredCommands = {};   // { name: true } dedupe set for the live iframe
 
   // ========== DOM REFERENCES ==========
   var phoneFrame = document.getElementById('phone-frame');
@@ -415,9 +418,65 @@
     renderMolocoV2Section();
   }
 
+  // The "Manual triggers" dock is shared: it shows for MolocoV2 (macro controls)
+  // OR whenever the live iframe has registered >=1 plbx_html external command.
+  // Two independent docks: the MolocoV2 macro dock (top-left, molocoV2 only) and
+  // the game-command toolbar (top-right, shown whenever the live iframe has
+  // registered >=1 plbx_html external command).
+  function updateDockVisibility() {
+    var mdock = document.getElementById('mv2-dock');
+    if (mdock) mdock.style.display = isMolocoV2 ? '' : 'none';
+    var cdock = document.getElementById('plbx-cmd-dock');
+    if (cdock) {
+      var hasCommands = false;
+      for (var k in registeredCommands) {
+        if (registeredCommands.hasOwnProperty(k)) { hasCommands = true; break; }
+      }
+      cdock.style.display = hasCommands ? '' : 'none';
+    }
+  }
+
+  // ========== PLBX_HTML EXTERNAL COMMANDS ==========
+  // Append a manual-trigger button for a plbx_html command (deduped by name).
+  // Click invokes the handler directly on the same-origin iframe.
+  function addCommandButton(name, label) {
+    if (!name || registeredCommands[name]) return;
+    var row = document.getElementById('plbx-cmd-row');
+    if (!row) return;
+    registeredCommands[name] = true;
+    var btn = document.createElement('button');
+    btn.className = 'mv2-btn';
+    btn.type = 'button';
+    btn.textContent = label || name;
+    btn.addEventListener('click', function() { invokeCommand(name); });
+    row.appendChild(btn);
+    updateDockVisibility();
+  }
+
+  function invokeCommand(name) {
+    var f = document.getElementById('preview-frame');
+    try {
+      if (f && f.contentWindow && f.contentWindow.plbx_html &&
+          typeof f.contentWindow.plbx_html[name] === 'function') {
+        f.contentWindow.plbx_html[name]();
+      }
+    } catch (e) {
+      log('command error: ' + name + ' — ' + (e && e.message || e), 'error');
+    }
+    log('→ command: ' + name, 'cta');
+  }
+
+  // Clear rendered command buttons + dedupe set — the external_commands list
+  // belongs to the previous iframe and must not leak across a network switch.
+  function resetCommands() {
+    registeredCommands = {};
+    var row = document.getElementById('plbx-cmd-row');
+    if (row) { while (row.firstChild) row.removeChild(row.firstChild); }
+    updateDockVisibility();
+  }
+
   function renderMolocoV2Section() {
-    var dock = document.getElementById('mv2-dock');
-    if (dock) dock.style.display = isMolocoV2 ? '' : 'none';
+    updateDockVisibility();
     updateViewableHint();
     var section = document.getElementById('molocov2-section');
     if (!section) return;
@@ -584,6 +643,9 @@
     molocoV2MacroDefs = CHECK_DEFS
       .filter(function(d) { return d.id.indexOf('macro_') === 0; })
       .map(function(d) { return { id: d.id, label: d.label, key: d.id.replace('macro_', '') }; });
+    // external_commands belong to the previous iframe — clear rendered command
+    // buttons + dedupe set before the new iframe loads and re-announces.
+    resetCommands();
     resetMolocoV2State();
 
     resetChecks();
@@ -692,7 +754,19 @@
 
   // ========== POST MESSAGE LISTENER ==========
   window.addEventListener('message', function(e) {
-    if (!e.data || e.data.type !== 'plbx:preview') return;
+    if (!e.data) return;
+    // plbx_html external commands announce themselves via expose() — render a
+    // manual-trigger button per command. Listener is registered before any
+    // iframe loads, so no expose() announcement is missed.
+    if (e.data.type === 'plbx:command') {
+      // Only the VISIBLE preview-frame may register commands. The offscreen boot
+      // harness loads the same build (same expose() bridge) and would otherwise
+      // leak buttons into the live dock and accumulate across its mode sweep.
+      var pf = document.getElementById('preview-frame');
+      if (pf && e.source === pf.contentWindow) addCommandButton(e.data.name, e.data.label);
+      return;
+    }
+    if (e.data.type !== 'plbx:preview') return;
     // Boot-harness iframe beacons are handled by the harness's own per-mode
     // listener — never pollute the main checklist with them.
     if (bootHarnessFrame && e.source === bootHarnessFrame.contentWindow) return;
@@ -805,16 +879,19 @@
     });
   }
 
-  var mv2DockToggle = document.getElementById('mv2-dock-toggle');
-  if (mv2DockToggle) {
-    mv2DockToggle.addEventListener('click', function() {
-      var dock = document.getElementById('mv2-dock');
+  function wireDockToggle(toggleId, dockId) {
+    var toggle = document.getElementById(toggleId);
+    if (!toggle) return;
+    toggle.addEventListener('click', function() {
+      var dock = document.getElementById(dockId);
       if (!dock) return;
       var collapsed = dock.classList.toggle('collapsed');
-      mv2DockToggle.textContent = collapsed ? '+' : '–';
-      mv2DockToggle.title = collapsed ? 'Expand' : 'Collapse';
+      toggle.textContent = collapsed ? '+' : '–';
+      toggle.title = collapsed ? 'Expand' : 'Collapse';
     });
   }
+  wireDockToggle('mv2-dock-toggle', 'mv2-dock');
+  wireDockToggle('plbx-cmd-toggle', 'plbx-cmd-dock');
 
   // ========== AUDIO CONTROL ==========
   function dispatchToIframe(eventName, detail) {

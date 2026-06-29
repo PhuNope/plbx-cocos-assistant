@@ -48,8 +48,8 @@ function plbx_boot_engine() {
   function doBoot() { try { window.__plbx_boot(); } catch (e) { console.error('[plbx] boot cb:', e); } }
   function callBoot() {
     if (typeof window.__plbx_boot !== 'function') { if (DEBUG) console.warn('[plbx] no __plbx_boot'); return; }
-    // mraid defer-boot gate: network adapters set __plbx_pre_boot to delay boot
-    // until mraid.isViewable() (video+playable combos).
+    // pre-boot gate: network adapters set __plbx_pre_boot to delay boot until
+    // the ad container reports viewable (video+playable combos).
     if (typeof window.__plbx_pre_boot === 'function') {
       try { window.__plbx_pre_boot(doBoot); } catch (e) { console.error('[plbx] pre_boot:', e); doBoot(); }
     } else doBoot();

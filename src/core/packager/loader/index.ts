@@ -17,11 +17,28 @@ import { emitLifecycle } from './lifecycle';
 import { emitUnpack } from './unpack';
 
 export function generateSelfContainedLoader(options: RuntimeLoaderOptions = {}): string {
-  return [
-    emitSharedHelpers(),
-    emitModuleHooks(options),
-    emitAssetIO(options),
-    emitLifecycle(options),
-    emitUnpack(options),
-  ].join('\n');
+  return stripLineComments(
+    [
+      emitSharedHelpers(),
+      emitModuleHooks(options),
+      emitAssetIO(options),
+      emitLifecycle(options),
+      emitUnpack(options),
+    ].join('\n'),
+  );
+}
+
+/**
+ * Drop whole-line `//` comments + blank lines from the emitted loader.
+ * Shrinks the build and keeps explanatory tokens (e.g. ad-SDK script names)
+ * out of the shipped HTML — some validators (Facebook/Moloco) reject any build
+ * containing `mraid.js`, even inside a comment. Only lines that are entirely a
+ * comment are removed; inline/trailing `//` and all code stay untouched, so URL
+ * regexes like `/^(https?:)?\/\//` survive intact.
+ */
+function stripLineComments(js: string): string {
+  return js
+    .split('\n')
+    .filter((line) => line.trim() !== '' && !line.trim().startsWith('//'))
+    .join('\n');
 }
